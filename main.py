@@ -892,6 +892,137 @@ async def search_groups(request: SearchGroupsRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+@app.post("/groups/join")
+async def join_group(request: JoinGroupRequest):
+    """
+    الانضمام إلى مجموعة Telegram
+    """
+    try:
+        # إنشاء client من session_string
+        client = TelegramClient(
+            StringSession(request.session_string),
+            int(request.api_id),
+            request.api_hash
+        )
+        
+        await client.connect()
+        
+        if not await client.is_user_authorized():
+            raise HTTPException(status_code=401, detail="Session expired or invalid")
+        
+        entity = None
+        
+        try:
+            # أولاً: إذا كان لدينا username، نستخدمه
+            if request.username:
+                clean_username = request.username.replace('@', '').strip()
+                try:
+                    entity = await client.get_entity(clean_username)
+                    if not (hasattr(entity, 'megagroup') or hasattr(entity, 'broadcast')):
+                        raise HTTPException(status_code=400, detail="Username is not a group or channel")
+                except Exception as e:
+                    raise HTTPException(status_code=404, detail=f"Group not found by username: {str(e)}")
+            
+            # ثانياً: إذا كان لدينا invite_link، نستخدمه
+            elif request.invite_link:
+                try:
+                    # استخراج hash من رابط الدعوة
+                    # مثال: https://t.me/joinchat/ABC123xyz
+                    if 'joinchat/' in request.invite_link:
+                        invite_hash = request.invite_link.split('joinchat/')[-1]
+                        result = await client(ImportChatInviteRequest(invite_hash))
+                        entity = result.chats[0] if result.chats else None
+                    elif 't.me/+' in request.invite_link:
+                        # استخراج hash من رابط +invite
+                        invite_hash = request.invite_link.split('+')[-1].split('/')[-1]
+                        result = await client(ImportChatInviteRequest(invite_hash))
+                        entity = result.chats[0] if result.chats else None
+                    else:
+                        raise HTTPException(status_code=400, detail="Invalid invite link format")
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"Failed to join via invite link: {str(e)}")
+            
+            # ثالثاً: إذا كان لدينا group_id فقط، نحاول البحث في dialogs أو استخدام username
+            elif request.group_id:
+                group_id_int = int(request.group_id)
+                # البحث في dialogs أولاً
+                try:
+                    dialogs = await client.get_dialogs(limit=200)
+                    for dialog in dialogs:
+                        if hasattr(dialog.entity, 'id') and dialog.entity.id == group_id_int:
+                            entity = dialog.entity
+                            # إذا كان المستخدم عضو بالفعل
+                            raise HTTPException(status_code=400, detail="You are already a member of this group")
+                except HTTPException:
+                    raise
+                except:
+                    pass
+                
+                # إذا لم نجدها في dialogs، نحاول get_entity
+                if not entity:
+                    try:
+                        entity = await client.get_entity(group_id_int)
+                        if not (hasattr(entity, 'megagroup') or hasattr(entity, 'broadcast')):
+                            entity = None
+                    except:
+                        pass
+                
+                if not entity:
+                    raise HTTPException(
+                        status_code=404, 
+                        detail="Group not found. Please provide username or invite_link to join"
+                    )
+            
+            else:
+                raise HTTPException(status_code=400, detail="Either username, invite_link, or group_id must be provided")
+            
+            # الانضمام للمجموعة
+            try:
+                if hasattr(entity, 'broadcast') or hasattr(entity, 'megagroup'):
+                    # للمجموعات والقنوات
+                    await client(JoinChannelRequest(entity))
+                else:
+                    # للمجموعات العادية (نادر)
+                    me = await client.get_me()
+                    await client(AddChatUserRequest(
+                        chat_id=entity.id,
+                        user_id=me.id
+                    ))
+                
+                await client.disconnect()
+                
+                return {
+                    "success": True,
+                    "message": f"تم الانضمام إلى المجموعة بنجاح: {getattr(entity, 'title', 'Unknown')}",
+                    "group_id": entity.id if hasattr(entity, 'id') else None,
+                    "group_title": getattr(entity, 'title', 'Unknown'),
+                    "username": getattr(entity, 'username', None)
+                }
+                
+            except Exception as e:
+                await client.disconnect()
+                error_msg = str(e)
+                
+                if "already" in error_msg.lower() or "member" in error_msg.lower():
+                    raise HTTPException(status_code=400, detail="You are already a member of this group")
+                elif "invite" in error_msg.lower() or "link" in error_msg.lower():
+                    raise HTTPException(status_code=400, detail="Invalid invite link or you need an invite link to join")
+                elif "right" in error_msg.lower() or "permission" in error_msg.lower():
+                    raise HTTPException(status_code=403, detail="You don't have permission to join this group")
+                else:
+                    raise HTTPException(status_code=400, detail=f"Failed to join group: {error_msg}")
+        
+        except HTTPException:
+            raise
+        except Exception as e:
+            await client.disconnect()
+            raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 @app.get("/health")
 async def health_check():
     return {
