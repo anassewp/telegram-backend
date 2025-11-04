@@ -6,6 +6,7 @@ from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, FloodWaitError, UserBannedInChannelError
 from telethon.tl.functions.messages import AddChatUserRequest, SearchGlobalRequest
 from telethon.tl.functions.channels import GetFullChannelRequest
+from telethon.tl.functions.contacts import SearchRequest
 from telethon.tl.types import InputMessagesFilterEmpty, InputPeerEmpty
 import os
 from typing import List, Optional, Dict
@@ -563,7 +564,8 @@ async def search_groups(request: SearchGroupsRequest):
                 # إذا فشل جلب dialogs، نتابع بدون فلترة
                 print(f"Warning: Could not fetch user dialogs: {e}")
             
-            # استخدام SearchGlobalRequest للبحث
+            # استخدام SearchGlobalRequest للبحث - لكن هذا قد يعيد نتائج من مجموعات المستخدم
+            # لذلك سنستخدم طريقة مختلطة: البحث في الرسائل + فلترة قوية
             result = await client(SearchGlobalRequest(
                 q=request.query,
                 filter=InputMessagesFilterEmpty(),
@@ -572,11 +574,23 @@ async def search_groups(request: SearchGroupsRequest):
                 offset_rate=0,
                 offset_peer=InputPeerEmpty(),
                 offset_id=0,
-                limit=limit * 5  # جلب المزيد لضمان وجود نتائج بعد الفلترة
+                limit=limit * 10  # جلب الكثير من النتائج للعثور على مجموعات عامة
             ))
             
             print(f"Search returned {len(result.messages)} messages for query: {request.query}")
             print(f"User has {len(user_group_ids)} groups in dialogs")
+            
+            # جمع جميع الـ peers من الرسائل
+            all_peers = {}
+            for message in result.messages:
+                if not message.peer_id:
+                    continue
+                peer = message.peer_id
+                if hasattr(peer, 'channel_id'):
+                    if peer.channel_id not in all_peers:
+                        all_peers[peer.channel_id] = peer
+            
+            print(f"Found {len(all_peers)} unique channels/groups in search results")
             
             groups = []
             seen_ids = set()
@@ -585,19 +599,7 @@ async def search_groups(request: SearchGroupsRequest):
             skipped_broadcast = 0
             
             # استخراج المجموعات من النتائج
-            for message in result.messages:
-                if not message.peer_id:
-                    continue
-                
-                # الحصول على معلومات المجموعة
-                peer = message.peer_id
-                
-                # التحقق من نوع الـ peer - يجب أن يكون channel (supergroup أو channel)
-                if not hasattr(peer, 'channel_id'):
-                    continue
-                
-                group_id = peer.channel_id
-                
+            for group_id, peer in all_peers.items():
                 # تجنب التكرار
                 if group_id in seen_ids:
                     continue
@@ -606,19 +608,18 @@ async def search_groups(request: SearchGroupsRequest):
                     # الحصول على معلومات المجموعة
                     entity = await client.get_entity(peer)
                     
-                    # فلترة: نحاول إعطاء الأولوية للمجموعات العامة (التي لها username)
-                    # لكن إذا كانت النتائج قليلة، قد نسمح ببعض المجموعات الأخرى
+                    # فلترة: فقط المجموعات العامة (التي لها username)
                     has_username = hasattr(entity, 'username') and entity.username
-                    
-                    # إذا كانت المجموعة من مجموعات المستخدم، نتخطاها
-                    if entity.id in user_group_ids:
-                        skipped_user_group += 1
-                        continue  # تخطي المجموعات التي المستخدم عضو فيها
                     
                     # إذا لم يكن لها username، نتخطاها (نريد فقط المجموعات العامة للبحث العالمي)
                     if not has_username:
                         skipped_no_username += 1
                         continue
+                    
+                    # إذا كانت المجموعة من مجموعات المستخدم، نتخطاها
+                    if entity.id in user_group_ids:
+                        skipped_user_group += 1
+                        continue  # تخطي المجموعات التي المستخدم عضو فيها
                     
                     # فلترة: فقط المجموعات (supergroups) وليس القنوات إذا كان groups_only = True
                     if request.groups_only:
