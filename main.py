@@ -3,10 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import SessionPasswordNeededError, FloodWaitError, UserBannedInChannelError
+from telethon.tl.functions.messages import AddChatUserRequest
 import os
-from typing import List, Optional
+from typing import List, Optional, Dict
 import asyncio
+from datetime import datetime, timedelta
+from collections import defaultdict
 
 # FastAPI app
 app = FastAPI(title="Telegram Backend API")
@@ -36,8 +39,65 @@ class VerifyCodeRequest(BaseModel):
 class SessionData(BaseModel):
     session_string: str
 
+class SendMessageRequest(BaseModel):
+    session_string: str
+    api_id: str
+    api_hash: str
+    group_id: int
+    message: str
+    schedule_at: Optional[str] = None  # ISO format timestamp
+
+class SendMessageResponse(BaseModel):
+    success: bool
+    message_id: Optional[int] = None
+    message: str
+    sent_at: Optional[str] = None
+
+class ExtractMembersRequest(BaseModel):
+    session_string: str
+    api_id: str
+    api_hash: str
+    group_id: int
+    limit: Optional[int] = 100
+
+class TransferMembersRequest(BaseModel):
+    session_string: str
+    api_id: str
+    api_hash: str
+    source_group_id: int
+    target_group_id: int
+    member_ids: List[int]  # List of telegram_user_id
+
 # Dictionary to store temporary clients (في الإنتاج، استخدم Redis)
 temp_clients = {}
+
+# Rate Limiting: تخزين آخر مرة تم إرسال رسالة من كل جلسة
+rate_limit_store: Dict[str, List[datetime]] = defaultdict(list)
+RATE_LIMIT_MESSAGES = 20  # عدد الرسائل المسموح بها
+RATE_LIMIT_WINDOW = timedelta(minutes=1)  # نافذة زمنية (دقيقة واحدة)
+
+def check_rate_limit(session_string: str) -> bool:
+    """
+    التحقق من Rate Limit
+    """
+    now = datetime.now()
+    # تنظيف الرسائل القديمة
+    rate_limit_store[session_string] = [
+        timestamp for timestamp in rate_limit_store[session_string]
+        if now - timestamp < RATE_LIMIT_WINDOW
+    ]
+    
+    # التحقق من العدد
+    if len(rate_limit_store[session_string]) >= RATE_LIMIT_MESSAGES:
+        return False
+    
+    return True
+
+def record_message_sent(session_string: str):
+    """
+    تسجيل رسالة مرسلة
+    """
+    rate_limit_store[session_string].append(datetime.now())
 
 @app.get("/")
 async def root():
@@ -191,6 +251,270 @@ async def delete_session(session_id: str):
         "success": True,
         "message": "Session deleted successfully"
     }
+
+@app.post("/messages/send")
+async def send_message(request: SendMessageRequest):
+    """
+    إرسال رسالة إلى مجموعة Telegram
+    """
+    try:
+        # إنشاء client من session_string
+        client = TelegramClient(
+            StringSession(request.session_string),
+            int(request.api_id),
+            request.api_hash
+        )
+        
+        await client.connect()
+        
+        if not await client.is_user_authorized():
+            raise HTTPException(status_code=401, detail="Session expired or invalid")
+        
+        # البحث عن المجموعة
+        try:
+            entity = await client.get_entity(request.group_id)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=f"Group not found: {str(e)}")
+        
+        # التحقق من Rate Limit
+        if not check_rate_limit(request.session_string):
+            await client.disconnect()
+            raise HTTPException(
+                status_code=429, 
+                detail=f"Rate limit exceeded. Maximum {RATE_LIMIT_MESSAGES} messages per minute. Please wait."
+            )
+        
+        # إرسال الرسالة
+        try:
+            message = await client.send_message(entity, request.message)
+            
+            # تسجيل الرسالة المرسلة
+            record_message_sent(request.session_string)
+            
+            # قطع الاتصال
+            await client.disconnect()
+            
+            return {
+                "success": True,
+                "message_id": message.id,
+                "message": "تم إرسال الرسالة بنجاح",
+                "sent_at": message.date.isoformat() if message.date else None
+            }
+        except FloodWaitError as e:
+            await client.disconnect()
+            wait_time = e.seconds
+            raise HTTPException(
+                status_code=429, 
+                detail=f"Telegram rate limit: Please wait {wait_time} seconds before sending more messages."
+            )
+        except UserBannedInChannelError:
+            await client.disconnect()
+            raise HTTPException(
+                status_code=403, 
+                detail="Account is banned or blocked from this group/channel"
+            )
+        except Exception as e:
+            await client.disconnect()
+            error_msg = str(e)
+            
+            # معالجة أخطاء محددة
+            if "flood" in error_msg.lower() or "rate limit" in error_msg.lower():
+                raise HTTPException(
+                    status_code=429, 
+                    detail="Rate limit exceeded. Please wait before sending more messages."
+                )
+            elif "banned" in error_msg.lower() or "blocked" in error_msg.lower():
+                raise HTTPException(
+                    status_code=403, 
+                    detail="Account banned or blocked from this group"
+                )
+            elif "right" in error_msg.lower() or "permission" in error_msg.lower():
+                raise HTTPException(
+                    status_code=403,
+                    detail="You don't have permission to send messages to this group"
+                )
+            else:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Failed to send message: {error_msg}"
+                )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.post("/members/extract")
+async def extract_members(request: ExtractMembersRequest):
+    """
+    استخراج أعضاء مجموعة Telegram
+    """
+    try:
+        # إنشاء client من session_string
+        client = TelegramClient(
+            StringSession(request.session_string),
+            int(request.api_id),
+            request.api_hash
+        )
+        
+        await client.connect()
+        
+        if not await client.is_user_authorized():
+            raise HTTPException(status_code=401, detail="Session expired or invalid")
+        
+        # البحث عن المجموعة
+        try:
+            entity = await client.get_entity(request.group_id)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=f"Group not found: {str(e)}")
+        
+        # استخراج الأعضاء
+        try:
+            participants = []
+            limit = request.limit or 100
+            
+            async for user in client.iter_participants(entity, limit=limit):
+                # تخطي البوتات إذا لم تكن مطلوبة
+                if user.bot:
+                    continue
+                
+                participants.append({
+                    "telegram_user_id": user.id,
+                    "username": user.username,
+                    "first_name": user.first_name,
+                    "last_name": user.last_name,
+                    "phone": user.phone,
+                    "is_bot": user.bot,
+                    "is_premium": getattr(user, 'premium', False),
+                    "is_verified": getattr(user, 'verified', False),
+                    "is_scam": getattr(user, 'scam', False),
+                    "is_fake": getattr(user, 'fake', False),
+                    "access_hash": user.access_hash
+                })
+            
+            await client.disconnect()
+            
+            return {
+                "success": True,
+                "members": participants,
+                "total": len(participants),
+                "message": f"تم استخراج {len(participants)} عضو بنجاح"
+            }
+        except Exception as e:
+            await client.disconnect()
+            error_msg = str(e)
+            
+            # معالجة أخطاء محددة
+            if "right" in error_msg.lower() or "permission" in error_msg.lower():
+                raise HTTPException(status_code=403, detail="You don't have permission to view participants in this group")
+            elif "banned" in error_msg.lower() or "blocked" in error_msg.lower():
+                raise HTTPException(status_code=403, detail="Account banned or blocked from this group")
+            else:
+                raise HTTPException(status_code=400, detail=f"Failed to extract members: {error_msg}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.post("/members/transfer")
+async def transfer_members(request: TransferMembersRequest):
+    """
+    نقل أعضاء من مجموعة إلى أخرى
+    """
+    try:
+        # إنشاء client من session_string
+        client = TelegramClient(
+            StringSession(request.session_string),
+            int(request.api_id),
+            request.api_hash
+        )
+        
+        await client.connect()
+        
+        if not await client.is_user_authorized():
+            raise HTTPException(status_code=401, detail="Session expired or invalid")
+        
+        # البحث عن المجموعات
+        try:
+            source_entity = await client.get_entity(request.source_group_id)
+            target_entity = await client.get_entity(request.target_group_id)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=f"Group not found: {str(e)}")
+        
+        # نقل الأعضاء
+        transferred = []
+        failed = []
+        
+        for member_id in request.member_ids:
+            try:
+                # الحصول على معلومات العضو
+                user = await client.get_entity(member_id)
+                
+                # إضافة العضو إلى المجموعة الهدف
+                await client(AddChatUserRequest(
+                    chat_id=target_entity.id,
+                    user_id=user.id
+                ))
+                
+                transferred.append({
+                    "telegram_user_id": member_id,
+                    "username": user.username,
+                    "first_name": user.first_name
+                })
+                
+                # إضافة تأخير صغير لتجنب Rate Limiting
+                await asyncio.sleep(2)
+                
+            except FloodWaitError as e:
+                wait_time = e.seconds
+                failed.append({
+                    "telegram_user_id": member_id,
+                    "error": f"Rate limit: wait {wait_time} seconds"
+                })
+                # انتظار قبل المحاولة التالية
+                await asyncio.sleep(wait_time)
+            except UserBannedInChannelError:
+                failed.append({
+                    "telegram_user_id": member_id,
+                    "error": "Account is banned from this group"
+                })
+            except Exception as e:
+                error_msg = str(e)
+                
+                # معالجة أخطاء محددة
+                if "right" in error_msg.lower() or "permission" in error_msg.lower():
+                    failed.append({
+                        "telegram_user_id": member_id,
+                        "error": "No permission to add users"
+                    })
+                elif "banned" in error_msg.lower() or "blocked" in error_msg.lower():
+                    failed.append({
+                        "telegram_user_id": member_id,
+                        "error": "User banned or blocked"
+                    })
+                else:
+                    failed.append({
+                        "telegram_user_id": member_id,
+                        "error": error_msg
+                    })
+        
+        await client.disconnect()
+        
+        return {
+            "success": True,
+            "transferred": transferred,
+            "failed": failed,
+            "total_requested": len(request.member_ids),
+            "total_transferred": len(transferred),
+            "total_failed": len(failed),
+            "message": f"تم نقل {len(transferred)} عضو بنجاح"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.get("/health")
 async def health_check():

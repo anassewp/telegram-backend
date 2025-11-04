@@ -37,7 +37,7 @@ python main.py
 cd telegram-backend
 git init
 git add .
-git commit -m "Initial commit"
+git commit -m "Initial Telegram Backend for SocialPro"
 git branch -M main
 git remote add origin <YOUR_GITHUB_REPO_URL>
 git push -u origin main
@@ -48,44 +48,33 @@ git push -u origin main
 1. في لوحة تحكم Render، اضغط **New +** → **Web Service**
 2. اربط GitHub repository الخاص بك
 3. املأ التفاصيل:
-   - **Name**: `telegram-backend` (أو أي اسم)
-   - **Environment**: `Python 3`
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `python main.py`
-   - **Plan**: `Free` (750 ساعة مجاناً شهرياً)
-
+   ```
+   Name: socialpro-telegram-backend
+   Environment: Python 3
+   Build Command: pip install -r requirements.txt
+   Start Command: python main.py
+   Plan: Free
+   ```
 4. اضغط **Create Web Service**
 
 ### الخطوة 4: الحصول على URL النهائي
 
 بعد النشر بنجاح، ستحصل على URL مثل:
 ```
-https://telegram-backend-xxxx.onrender.com
+https://socialpro-telegram-backend-xxxx.onrender.com
 ```
 
 ### الخطوة 5: ربط Backend مع Frontend
 
-في مشروع React الخاص بك، أضف متغير البيئة:
-
-**`.env.local`**:
+في مشروع `socialpro-saas`، أضف ملف `.env.local`:
 ```
-NEXT_PUBLIC_TELEGRAM_BACKEND_URL=https://telegram-backend-xxxx.onrender.com
+NEXT_PUBLIC_TELEGRAM_BACKEND_URL=https://socialpro-telegram-backend-xxxx.onrender.com
 ```
 
-ثم في الكود:
-```typescript
-const BACKEND_URL = process.env.NEXT_PUBLIC_TELEGRAM_BACKEND_URL;
-
-// مثال: إرسال رمز التحقق
-const response = await fetch(`${BACKEND_URL}/auth/send-code`, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    phone: '+966xxxxxxxxx',
-    api_id: 'YOUR_API_ID',
-    api_hash: 'YOUR_API_HASH',
-  }),
-});
+أعد البناء والنشر:
+```bash
+npm run build
+# ثم deploy
 ```
 
 ## API Endpoints
@@ -147,20 +136,97 @@ POST /groups/import/{session_id}?api_id=xxx&api_hash=xxx&session_string=xxx
 ```json
 {
   "success": true,
-  "groups": [
-    {
-      "group_id": 123456789,
-      "title": "اسم المجموعة",
-      "username": "group_username",
-      "members_count": 1250,
-      "type": "supergroup"
-    }
-  ],
+  "groups": [...],
   "total": 15
 }
 ```
 
-### 4. حذف جلسة
+### 4. إرسال رسالة
+```
+POST /messages/send
+```
+
+**Body:**
+```json
+{
+  "session_string": "1AQAAAABC...",
+  "api_id": "12345678",
+  "api_hash": "abcdef1234567890",
+  "group_id": 123456789,
+  "message": "نص الرسالة",
+  "schedule_at": "2025-11-03T10:00:00Z" // optional
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message_id": 12345,
+  "message": "تم إرسال الرسالة بنجاح",
+  "sent_at": "2025-11-03T10:00:00Z"
+}
+```
+
+**Rate Limiting:** 20 رسالة في الدقيقة الواحدة لكل جلسة
+
+### 5. استخراج الأعضاء
+```
+POST /members/extract
+```
+
+**Body:**
+```json
+{
+  "session_string": "1AQAAAABC...",
+  "api_id": "12345678",
+  "api_hash": "abcdef1234567890",
+  "group_id": 123456789,
+  "limit": 100 // optional, default: 100
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "members": [...],
+  "total": 95,
+  "message": "تم استخراج 95 عضو بنجاح"
+}
+```
+
+### 6. نقل الأعضاء
+```
+POST /members/transfer
+```
+
+**Body:**
+```json
+{
+  "session_string": "1AQAAAABC...",
+  "api_id": "12345678",
+  "api_hash": "abcdef1234567890",
+  "source_group_id": 123456789,
+  "target_group_id": 987654321,
+  "member_ids": [111111, 222222, 333333]
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "transferred": [...],
+  "failed": [...],
+  "total_requested": 3,
+  "total_transferred": 2,
+  "total_failed": 1,
+  "message": "تم نقل 2 عضو بنجاح"
+}
+```
+
+### 7. حذف جلسة
 ```
 DELETE /sessions/{session_id}
 ```
@@ -170,6 +236,19 @@ DELETE /sessions/{session_id}
 {
   "success": true,
   "message": "Session deleted successfully"
+}
+```
+
+### 8. فحص الصحة
+```
+GET /health
+```
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "active_temp_clients": 2
 }
 ```
 
@@ -189,6 +268,22 @@ DELETE /sessions/{session_id}
 
 ⚠️ **مهم:** لا تشارك هذه البيانات مع أحد!
 
+## Rate Limiting
+
+النظام يطبق Rate Limiting تلقائياً:
+- **الرسائل:** 20 رسالة في الدقيقة الواحدة لكل جلسة
+- **النقل:** تأخير 2 ثانية بين كل عملية نقل
+- **الحماية:** معالجة FloodWaitError من Telegram تلقائياً
+
+## معالجة الأخطاء
+
+النظام يتعامل مع الأخطاء التالية:
+- **FloodWaitError:** انتظار تلقائي
+- **UserBannedInChannelError:** إرجاع خطأ واضح
+- **Rate Limit Exceeded:** رسالة خطأ مع وقت الانتظار
+- **Permission Denied:** رسالة خطأ واضحة
+- **Session Expired:** إرجاع خطأ 401
+
 ## ملاحظات مهمة
 
 ### Free Tier Limitations على Render.com:
@@ -203,9 +298,10 @@ DELETE /sessions/{session_id}
 
 ### التحسينات المستقبلية:
 - استخدام Redis لحفظ temp_clients بدلاً من الذاكرة
-- إضافة Rate Limiting
+- استخدام Redis لـ Rate Limiting في بيئة متعددة الخوادم
 - إضافة Authentication للـ API
 - Logging محسّن
+- Monitoring و Alerting
 
 ## الدعم
 
@@ -213,3 +309,4 @@ DELETE /sessions/{session_id}
 1. تحقق من Logs في Render Dashboard
 2. تأكد من API credentials صحيحة
 3. تأكد من رقم الهاتف بالصيغة الدولية (+966...)
+4. تحقق من Rate Limiting إذا كانت الرسائل تفشل
