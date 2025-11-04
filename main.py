@@ -248,25 +248,29 @@ async def import_groups(
             
             # فقط المجموعات (supergroups) أو المجموعات العادية
             if is_megagroup or (hasattr(entity, 'id') and not is_channel):
-                # التحقق من إمكانية رؤية الأعضاء
-                # نحاول جلب معلومات كاملة للمجموعة
                 try:
-                    # محاولة جلب معلومات المجموعة للتأكد من إمكانية رؤية الأعضاء
-                    # إذا كان لدينا participants_count، فهذا يعني أننا يمكننا رؤية الأعضاء
-                    participants_count = getattr(entity, 'participants_count', 0)
-                    
-                    # إذا كانت المجموعة خاصة جداً (لا يمكن رؤية الأعضاء)، نتخطاها
-                    # لكن نحاول أولاً iter_participants على مجموعة واحدة للتأكد
-                    # لكن هذا قد يكون بطيئاً، لذلك سنستخدم participants_count كدليل
-                    
-                    # إذا كانت المجموعة لديها participants_count = 0 أو None، قد تكون خاصة جداً
-                    # لكن هذا ليس مضموناً، لذلك سنستخدم طريقة أخرى:
+                    # التحقق من إمكانية رؤية الأعضاء
                     # نحاول التحقق من أن المجموعة ليست مقيدة (restricted)
                     is_restricted = getattr(entity, 'restricted', False)
                     
                     # إذا كانت المجموعة مقيدة، قد لا نتمكن من رؤية الأعضاء
                     if is_restricted:
+                        print(f"Skipping restricted group: {getattr(entity, 'title', 'Unknown')}")
                         continue
+                    
+                    # محاولة جلب عدد الأعضاء
+                    participants_count = getattr(entity, 'participants_count', 0)
+                    
+                    # إذا كانت المجموعة لديها participants_count = 0، قد تكون خاصة جداً
+                    # لكن هذا ليس مضموناً، لذلك سنحاول التحقق بطريقة أخرى:
+                    # نحاول جلب معلومات كاملة للمجموعة باستخدام GetFullChannelRequest
+                    # لكن هذا قد يكون بطيئاً، لذلك سنستخدم participants_count من dialog
+                    
+                    # ملاحظة: participants_count من dialog قد يكون 0 حتى للمجموعات العادية
+                    # لذلك سنستخدم المنطق التالي:
+                    # - إذا كان participants_count > 0، نعتبر أننا نستطيع رؤية الأعضاء
+                    # - إذا كان participants_count = 0، قد تكون المجموعة خاصة، لكن سنحاول أيضاً
+                    # - لكن سنتخطى المجموعات المقيدة فقط
                     
                     group_type = 'supergroup' if is_megagroup else 'group'
                     
@@ -274,7 +278,7 @@ async def import_groups(
                         "group_id": entity.id,
                         "title": entity.title,
                         "username": getattr(entity, 'username', None),
-                        "members_count": participants_count or getattr(entity, 'participants_count', 0),
+                        "members_count": participants_count or 0,
                         "type": group_type
                     })
                 except Exception as e:
