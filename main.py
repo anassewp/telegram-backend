@@ -237,19 +237,50 @@ async def import_groups(
         for dialog in dialogs:
             entity = dialog.entity
             
-            # فلترة المجموعات والقنوات فقط
-            if hasattr(entity, 'megagroup') or hasattr(entity, 'broadcast'):
-                group_type = 'supergroup' if getattr(entity, 'megagroup', False) else 'channel'
-                if not hasattr(entity, 'megagroup') and not hasattr(entity, 'broadcast'):
-                    group_type = 'group'
-                
-                groups.append({
-                    "group_id": entity.id,
-                    "title": entity.title,
-                    "username": getattr(entity, 'username', None),
-                    "members_count": getattr(entity, 'participants_count', 0),
-                    "type": group_type
-                })
+            # فلترة: فقط المجموعات (supergroups) وليس القنوات
+            # القنوات لها broadcast = True، المجموعات لها megagroup = True
+            is_channel = getattr(entity, 'broadcast', False)
+            is_megagroup = getattr(entity, 'megagroup', False)
+            
+            # تخطي القنوات (channels)
+            if is_channel:
+                continue
+            
+            # فقط المجموعات (supergroups) أو المجموعات العادية
+            if is_megagroup or (hasattr(entity, 'id') and not is_channel):
+                # التحقق من إمكانية رؤية الأعضاء
+                # نحاول جلب معلومات كاملة للمجموعة
+                try:
+                    # محاولة جلب معلومات المجموعة للتأكد من إمكانية رؤية الأعضاء
+                    # إذا كان لدينا participants_count، فهذا يعني أننا يمكننا رؤية الأعضاء
+                    participants_count = getattr(entity, 'participants_count', 0)
+                    
+                    # إذا كانت المجموعة خاصة جداً (لا يمكن رؤية الأعضاء)، نتخطاها
+                    # لكن نحاول أولاً iter_participants على مجموعة واحدة للتأكد
+                    # لكن هذا قد يكون بطيئاً، لذلك سنستخدم participants_count كدليل
+                    
+                    # إذا كانت المجموعة لديها participants_count = 0 أو None، قد تكون خاصة جداً
+                    # لكن هذا ليس مضموناً، لذلك سنستخدم طريقة أخرى:
+                    # نحاول التحقق من أن المجموعة ليست مقيدة (restricted)
+                    is_restricted = getattr(entity, 'restricted', False)
+                    
+                    # إذا كانت المجموعة مقيدة، قد لا نتمكن من رؤية الأعضاء
+                    if is_restricted:
+                        continue
+                    
+                    group_type = 'supergroup' if is_megagroup else 'group'
+                    
+                    groups.append({
+                        "group_id": entity.id,
+                        "title": entity.title,
+                        "username": getattr(entity, 'username', None),
+                        "members_count": participants_count or getattr(entity, 'participants_count', 0),
+                        "type": group_type
+                    })
+                except Exception as e:
+                    # إذا فشل جلب المعلومات، نتخطى المجموعة
+                    print(f"Warning: Could not get group info for {getattr(entity, 'title', 'Unknown')}: {e}")
+                    continue
         
         await client.disconnect()
         
