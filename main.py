@@ -7,7 +7,7 @@ from telethon.errors import SessionPasswordNeededError, FloodWaitError, UserBann
 from telethon.tl.functions.messages import AddChatUserRequest, SearchGlobalRequest
 from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.functions.contacts import SearchRequest
-from telethon.tl.types import InputMessagesFilterEmpty, InputPeerEmpty
+from telethon.tl.types import InputMessagesFilterEmpty, InputPeerEmpty, InputPeerChannel
 import os
 from typing import List, Optional, Dict
 import asyncio
@@ -564,10 +564,12 @@ async def search_groups(request: SearchGroupsRequest):
                 # إذا فشل جلب dialogs، نتابع بدون فلترة
                 print(f"Warning: Could not fetch user dialogs: {e}")
             
-            # استخدام SearchGlobalRequest للبحث - لكن هذا قد يعيد نتائج من مجموعات المستخدم
-            # لذلك سنبحث في عدة صفحات للحصول على المزيد من النتائج
+            # البحث في عدة مصادر للحصول على نتائج أكثر
             all_peers = {}
-            max_pages = 3  # البحث في 3 صفحات
+            
+            # 1. البحث في الرسائل العالمية (SearchGlobalRequest)
+            print("=== Searching in global messages ===")
+            max_pages = 3
             messages_per_page = 100
             
             for page in range(max_pages):
@@ -577,7 +579,7 @@ async def search_groups(request: SearchGroupsRequest):
                         filter=InputMessagesFilterEmpty(),
                         min_date=None,
                         max_date=None,
-                        offset_rate=page * messages_per_page,  # offset للصفحات
+                        offset_rate=page * messages_per_page,
                         offset_peer=InputPeerEmpty(),
                         offset_id=0,
                         limit=messages_per_page
@@ -585,7 +587,7 @@ async def search_groups(request: SearchGroupsRequest):
                     
                     print(f"Page {page + 1}: Search returned {len(result.messages)} messages")
                     
-                    # جمع جميع الـ peers من الرسائل في هذه الصفحة
+                    # جمع جميع الـ peers من الرسائل
                     for message in result.messages:
                         if not message.peer_id:
                             continue
@@ -594,13 +596,69 @@ async def search_groups(request: SearchGroupsRequest):
                             if peer.channel_id not in all_peers:
                                 all_peers[peer.channel_id] = peer
                     
-                    # إذا لم تكن هناك رسائل أكثر، توقف
                     if len(result.messages) < messages_per_page:
                         break
                         
                 except Exception as e:
                     print(f"Error searching page {page + 1}: {e}")
                     break
+            
+            # 2. البحث في جهات الاتصال والمجموعات (contacts.Search)
+            print("=== Searching in contacts/groups ===")
+            try:
+                contacts_result = await client(SearchRequest(
+                    q=request.query,
+                    limit=100
+                ))
+                
+                print(f"Contacts search returned {len(contacts_result.chats)} chats")
+                
+                # جمع المجموعات من نتائج البحث في جهات الاتصال
+                for chat in contacts_result.chats:
+                    if hasattr(chat, 'id'):
+                        # إذا كانت قناة أو supergroup
+                        if hasattr(chat, 'broadcast') or hasattr(chat, 'megagroup'):
+                            if chat.id not in all_peers:
+                                # إنشاء peer من chat
+                                try:
+                                    peer = await client.get_entity(chat)
+                                    if hasattr(peer, 'id'):
+                                        # استخدام access_hash لإنشاء peer صحيح
+                                        from telethon.tl.types import InputPeerChannel
+                                        if hasattr(chat, 'access_hash'):
+                                            channel_peer = InputPeerChannel(
+                                                channel_id=chat.id,
+                                                access_hash=chat.access_hash
+                                            )
+                                            all_peers[chat.id] = channel_peer
+                                        else:
+                                            # إذا لم يكن access_hash متوفر، نحاول get_entity
+                                            all_peers[chat.id] = peer
+                                except Exception as e:
+                                    print(f"Error processing chat {chat.id}: {e}")
+                                    continue
+                                    
+            except Exception as e:
+                print(f"Error in contacts search: {e}")
+            
+            # 3. محاولة البحث عن username مباشرة (إذا كان query يبدو كـ username)
+            print("=== Trying direct username search ===")
+            query_clean = request.query.strip().replace('@', '').lower()
+            if query_clean and len(query_clean) > 3:  # فقط إذا كان query معقول
+                try:
+                    # محاولة البحث عن username مباشرة
+                    try:
+                        entity = await client.get_entity(query_clean)
+                        if hasattr(entity, 'id'):
+                            # إذا كانت قناة أو supergroup
+                            if hasattr(entity, 'broadcast') or hasattr(entity, 'megagroup'):
+                                if entity.id not in all_peers:
+                                    all_peers[entity.id] = await client.get_input_entity(entity)
+                                    print(f"Found direct match: {getattr(entity, 'title', 'Unknown')}")
+                    except:
+                        pass  # إذا لم يكن username صحيح، نتخطاه
+                except Exception as e:
+                    print(f"Error in direct username search: {e}")
             
             print(f"Search returned total {len(all_peers)} unique channels/groups for query: {request.query}")
             print(f"User has {len(user_group_ids)} groups in dialogs")
