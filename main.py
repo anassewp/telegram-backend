@@ -4,8 +4,8 @@ from pydantic import BaseModel
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, FloodWaitError, UserBannedInChannelError
-from telethon.tl.functions.messages import AddChatUserRequest, SearchGlobalRequest
-from telethon.tl.functions.channels import GetFullChannelRequest
+from telethon.tl.functions.messages import AddChatUserRequest, SearchGlobalRequest, ImportChatInviteRequest
+from telethon.tl.functions.channels import GetFullChannelRequest, JoinChannelRequest
 from telethon.tl.functions.contacts import SearchRequest
 from telethon.tl.types import InputMessagesFilterEmpty, InputPeerEmpty, InputPeerChannel
 import os
@@ -79,6 +79,14 @@ class SearchGroupsRequest(BaseModel):
     query: str
     limit: Optional[int] = 20
     groups_only: Optional[bool] = True  # البحث في المجموعات فقط
+
+class JoinGroupRequest(BaseModel):
+    session_string: str
+    api_id: str
+    api_hash: str
+    group_id: Optional[int] = None
+    username: Optional[str] = None  # username للمجموعة
+    invite_link: Optional[str] = None  # رابط الدعوة
 
 # Dictionary to store temporary clients (في الإنتاج، استخدم Redis)
 temp_clients = {}
