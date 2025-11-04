@@ -5,6 +5,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, FloodWaitError, UserBannedInChannelError
 from telethon.tl.functions.messages import AddChatUserRequest, SearchGlobalRequest
+from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.types import InputMessagesFilterEmpty, InputPeerEmpty
 import os
 from typing import List, Optional, Dict
@@ -547,16 +548,16 @@ async def search_groups(request: SearchGroupsRequest):
         try:
             limit = min(request.limit or 20, 100)  # حد أقصى 100
             
-            # استخدام SearchGlobalRequest للبحث
+            # استخدام SearchGlobalRequest للبحث مع groups_only=True للبحث في المجموعات فقط
             result = await client(SearchGlobalRequest(
                 q=request.query,
                 filter=InputMessagesFilterEmpty(),
                 min_date=None,
                 max_date=None,
                 offset_rate=0,
-                offset_peer=InputPeerEmpty(),  # استخدام InputPeerEmpty() بدلاً من None
+                offset_peer=InputPeerEmpty(),
                 offset_id=0,
-                limit=limit
+                limit=limit * 2  # جلب المزيد لفلترة المجموعات العامة فقط
             ))
             
             groups = []
@@ -570,36 +571,51 @@ async def search_groups(request: SearchGroupsRequest):
                 # الحصول على معلومات المجموعة
                 peer = message.peer_id
                 
-                # فلترة المجموعات فقط إذا كان groups_only = True
-                if request.groups_only:
-                    # التحقق من نوع الـ peer
-                    if hasattr(peer, 'channel_id'):
-                        # قناة أو supergroup
-                        try:
-                            entity = await client.get_entity(peer)
-                            if hasattr(entity, 'broadcast') and entity.broadcast:
-                                # قناة وليست مجموعة
-                                continue
-                        except:
-                            continue
-                    elif not hasattr(peer, 'channel_id'):
-                        # ليس قناة ولا مجموعة
-                        continue
-                
-                # الحصول على معرف المجموعة
-                if hasattr(peer, 'channel_id'):
-                    group_id = peer.channel_id
-                else:
+                # التحقق من نوع الـ peer - يجب أن يكون channel (supergroup أو channel)
+                if not hasattr(peer, 'channel_id'):
                     continue
+                
+                group_id = peer.channel_id
                 
                 # تجنب التكرار
                 if group_id in seen_ids:
                     continue
-                seen_ids.add(group_id)
                 
                 try:
                     # الحصول على معلومات المجموعة
                     entity = await client.get_entity(peer)
+                    
+                    # فلترة: فقط المجموعات العامة (التي لها username) - البحث العالمي
+                    # استبعاد المجموعات الخاصة التي المستخدم عضو فيها
+                    if not hasattr(entity, 'username') or not entity.username:
+                        continue  # تخطي المجموعات الخاصة
+                    
+                    # فلترة: فقط المجموعات (supergroups) وليس القنوات إذا كان groups_only = True
+                    if request.groups_only:
+                        if hasattr(entity, 'broadcast') and entity.broadcast:
+                            continue  # تخطي القنوات، فقط المجموعات
+                    
+                    # الحصول على عدد الأعضاء الحقيقي
+                    members_count = 0
+                    try:
+                        # محاولة جلب عدد الأعضاء من FullChannel للحصول على العدد الحقيقي
+                        try:
+                            full_channel = await client(GetFullChannelRequest(entity))
+                            if hasattr(full_channel, 'full_chat') and hasattr(full_channel.full_chat, 'participants_count'):
+                                members_count = full_channel.full_chat.participants_count
+                            elif hasattr(full_channel, 'full_chat') and hasattr(full_channel.full_chat, 'members_count'):
+                                members_count = full_channel.full_chat.members_count
+                        except:
+                            # إذا فشل GetFullChannelRequest، نحاول من entity مباشرة
+                            if hasattr(entity, 'participants_count') and entity.participants_count:
+                                members_count = entity.participants_count
+                            elif hasattr(entity, 'members_count') and entity.members_count:
+                                members_count = entity.members_count
+                    except Exception as e:
+                        # إذا فشل كل شيء، نستخدم 0
+                        members_count = 0
+                    
+                    seen_ids.add(group_id)
                     
                     group_info = {
                         "id": str(group_id),
@@ -607,11 +623,11 @@ async def search_groups(request: SearchGroupsRequest):
                         "title": getattr(entity, 'title', 'Unknown'),
                         "username": getattr(entity, 'username', None),
                         "type": "channel" if getattr(entity, 'broadcast', False) else "supergroup",
-                        "members_count": getattr(entity, 'participants_count', 0),
+                        "members_count": members_count,
                         "description": getattr(entity, 'about', None),
-                        "is_public": getattr(entity, 'username', None) is not None,
+                        "is_public": True,  # إذا كان له username فهو عام
                         "verified": getattr(entity, 'verified', False),
-                        "invite_link": f"https://t.me/{entity.username}" if getattr(entity, 'username', None) else None
+                        "invite_link": f"https://t.me/{entity.username}" if entity.username else None
                     }
                     
                     groups.append(group_info)
