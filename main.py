@@ -5,7 +5,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, FloodWaitError, UserBannedInChannelError
 from telethon.tl.functions.messages import AddChatUserRequest, SearchGlobalRequest
-from telethon.tl.types import InputMessagesFilterEmpty
+from telethon.tl.types import InputMessagesFilterEmpty, InputPeerEmpty
 import os
 from typing import List, Optional, Dict
 import asyncio
@@ -554,7 +554,7 @@ async def search_groups(request: SearchGroupsRequest):
                 min_date=None,
                 max_date=None,
                 offset_rate=0,
-                offset_peer=None,
+                offset_peer=InputPeerEmpty(),  # استخدام InputPeerEmpty() بدلاً من None
                 offset_id=0,
                 limit=limit
             ))
