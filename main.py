@@ -62,6 +62,7 @@ class ExtractMembersRequest(BaseModel):
     api_hash: str
     group_id: int
     limit: Optional[int] = 100
+    username: Optional[str] = None  # username للمجموعة (اختياري)
 
 class TransferMembersRequest(BaseModel):
     session_string: str
@@ -374,8 +375,10 @@ async def extract_members(request: ExtractMembersRequest):
             raise HTTPException(status_code=401, detail="Session expired or invalid")
         
         # البحث عن المجموعة
+        # نحتاج username أيضاً إذا كان متوفراً
         entity = None
         group_id_int = int(request.group_id) if isinstance(request.group_id, (int, str)) and str(request.group_id).isdigit() else None
+        username = request.username  # username من الطلب
         
         try:
             # أولاً: نحاول البحث في dialogs المستخدم (للمجموعات التي هو عضو فيها)
@@ -390,27 +393,26 @@ async def extract_members(request: ExtractMembersRequest):
                 except Exception as e:
                     print(f"Warning: Could not search dialogs: {e}")
             
-            # ثانياً: إذا لم نجدها في dialogs، نحاول username أو get_entity مباشرة
-            if not entity:
+            # ثانياً: إذا لم نجدها في dialogs، نحاول البحث باستخدام username (إذا كان متوفراً)
+            if not entity and username:
                 try:
-                    # إذا كان group_id ليس رقم، قد يكون username
-                    if not group_id_int:
-                        entity = await client.get_entity(request.group_id)
-                    else:
-                        # إذا كان رقم، نحاول استخدام InputPeerChannel
-                        # لكن نحتاج access_hash، لذلك نحاول get_entity أولاً
-                        # قد يعمل إذا كانت المجموعة في cache
-                        try:
-                            entity = await client.get_entity(group_id_int)
-                            # التحقق من أن النتيجة هي group/channel وليس user
-                            if not (hasattr(entity, 'megagroup') or hasattr(entity, 'broadcast')):
+                    # إزالة @ من username إذا كان موجوداً
+                    clean_username = username.replace('@', '').strip()
+                    if clean_username:
+                        entity = await client.get_entity(clean_username)
+                        # التحقق من أن النتيجة هي group/channel
+                        if hasattr(entity, 'megagroup') or hasattr(entity, 'broadcast'):
+                            print(f"Found group via username: {getattr(entity, 'title', 'Unknown')} (ID: {entity.id}, Username: {clean_username})")
+                            # التحقق من أن ID يطابق (إذا كان متوفراً)
+                            if group_id_int and hasattr(entity, 'id') and entity.id != group_id_int:
+                                print(f"Warning: Username group ID ({entity.id}) doesn't match requested group_id ({group_id_int})")
                                 entity = None
-                        except:
-                            pass
+                        else:
+                            entity = None
                 except Exception as e:
-                    print(f"Warning: Could not get entity directly: {e}")
+                    print(f"Warning: Could not get entity via username '{username}': {e}")
             
-            # ثالثاً: إذا لم نجدها، نحاول البحث في dialogs مرة أخرى بدون حد
+            # ثالثاً: إذا لم نجدها، نحاول البحث في جميع dialogs
             if not entity and group_id_int:
                 try:
                     dialogs = await client.get_dialogs()
@@ -422,11 +424,31 @@ async def extract_members(request: ExtractMembersRequest):
                 except Exception as e:
                     print(f"Warning: Could not search all dialogs: {e}")
             
+            # رابعاً: إذا لم نجدها في dialogs، نحاول get_entity مباشرة (قد يعمل للمجموعات العامة)
             if not entity:
-                raise HTTPException(
-                    status_code=404, 
-                    detail=f"Group not found (group_id: {request.group_id}). Make sure you are a member of this group and it's in your dialogs."
-                )
+                try:
+                    if not group_id_int:
+                        # إذا كان ليس رقم، قد يكون username
+                        entity = await client.get_entity(request.group_id)
+                    else:
+                        # نحاول get_entity مباشرة (قد يعمل للمجموعات العامة في cache)
+                        try:
+                            entity = await client.get_entity(group_id_int)
+                            # التحقق من أن النتيجة هي group/channel وليس user
+                            if hasattr(entity, 'megagroup') or hasattr(entity, 'broadcast'):
+                                print(f"Found group via get_entity: {getattr(entity, 'title', 'Unknown')} (ID: {entity.id})")
+                            else:
+                                entity = None
+                        except Exception as e:
+                            print(f"Could not get entity directly: {e}")
+                except Exception as e:
+                    print(f"Warning: Could not get entity: {e}")
+            
+            if not entity:
+                error_msg = f"Group not found (group_id: {request.group_id}). "
+                error_msg += "To extract members, you must be a member of the group. "
+                error_msg += "Groups imported from global search may not be accessible for member extraction if you're not a member."
+                raise HTTPException(status_code=404, detail=error_msg)
                 
         except HTTPException:
             raise
