@@ -602,7 +602,7 @@ async def search_groups(request: SearchGroupsRequest):
                     print(f"Error searching page {page + 1}: {e}")
                     break
             
-            print(f"Search returned total {sum(len(all_peers) for _ in [1])} unique channels/groups for query: {request.query}")
+            print(f"Search returned total {len(all_peers)} unique channels/groups for query: {request.query}")
             print(f"User has {len(user_group_ids)} groups in dialogs")
             print(f"Found {len(all_peers)} unique channels/groups in search results")
             
@@ -705,10 +705,11 @@ async def search_groups(request: SearchGroupsRequest):
                         "api_version": "1.0",
                         "results_per_page": limit,
                         "debug": {
-                            "total_messages": len(result.messages),
+                            "total_unique_peers": len(all_peers),
                             "skipped_no_username": skipped_no_username,
                             "skipped_user_group": skipped_user_group,
-                            "skipped_broadcast": skipped_broadcast
+                            "skipped_broadcast": skipped_broadcast,
+                            "user_groups_count": len(user_group_ids)
                         }
                     }
                 }
