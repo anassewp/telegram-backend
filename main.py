@@ -375,9 +375,20 @@ async def extract_members(request: ExtractMembersRequest):
         
         # البحث عن المجموعة
         try:
-            entity = await client.get_entity(request.group_id)
+            # group_id قد يكون رقم (BIGINT) أو username
+            # نحاول كرقم أولاً، ثم كـ entity
+            try:
+                # إذا كان group_id رقم، نحوله إلى int
+                if isinstance(request.group_id, (int, str)) and str(request.group_id).isdigit():
+                    entity = await client.get_entity(int(request.group_id))
+                else:
+                    # إذا كان username أو entity
+                    entity = await client.get_entity(request.group_id)
+            except (ValueError, TypeError):
+                # إذا فشل، نحاول كـ entity مباشرة
+                entity = await client.get_entity(request.group_id)
         except Exception as e:
-            raise HTTPException(status_code=404, detail=f"Group not found: {str(e)}")
+            raise HTTPException(status_code=404, detail=f"Group not found (group_id: {request.group_id}): {str(e)}")
         
         # استخراج الأعضاء
         try:
@@ -389,18 +400,23 @@ async def extract_members(request: ExtractMembersRequest):
                 if user.bot:
                     continue
                 
+                # معالجة access_hash بشكل آمن (قد يكون None)
+                access_hash = None
+                if hasattr(user, 'access_hash') and user.access_hash is not None:
+                    access_hash = user.access_hash
+                
                 participants.append({
                     "telegram_user_id": user.id,
-                    "username": user.username,
-                    "first_name": user.first_name,
-                    "last_name": user.last_name,
-                    "phone": user.phone,
-                    "is_bot": user.bot,
+                    "username": user.username if hasattr(user, 'username') else None,
+                    "first_name": user.first_name if hasattr(user, 'first_name') else None,
+                    "last_name": user.last_name if hasattr(user, 'last_name') else None,
+                    "phone": user.phone if hasattr(user, 'phone') else None,
+                    "is_bot": user.bot if hasattr(user, 'bot') else False,
                     "is_premium": getattr(user, 'premium', False),
                     "is_verified": getattr(user, 'verified', False),
                     "is_scam": getattr(user, 'scam', False),
                     "is_fake": getattr(user, 'fake', False),
-                    "access_hash": user.access_hash
+                    "access_hash": access_hash
                 })
             
             await client.disconnect()
