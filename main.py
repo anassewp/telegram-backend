@@ -4,7 +4,8 @@ from pydantic import BaseModel
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, FloodWaitError, UserBannedInChannelError
-from telethon.tl.functions.messages import AddChatUserRequest
+from telethon.tl.functions.messages import AddChatUserRequest, SearchGlobalRequest
+from telethon.tl.types import InputMessagesFilterEmpty
 import os
 from typing import List, Optional, Dict
 import asyncio
@@ -67,6 +68,14 @@ class TransferMembersRequest(BaseModel):
     source_group_id: int
     target_group_id: int
     member_ids: List[int]  # List of telegram_user_id
+
+class SearchGroupsRequest(BaseModel):
+    session_string: str
+    api_id: str
+    api_hash: str
+    query: str
+    limit: Optional[int] = 20
+    groups_only: Optional[bool] = True  # البحث في المجموعات فقط
 
 # Dictionary to store temporary clients (في الإنتاج، استخدم Redis)
 temp_clients = {}
@@ -510,6 +519,149 @@ async def transfer_members(request: TransferMembersRequest):
             "total_failed": len(failed),
             "message": f"تم نقل {len(transferred)} عضو بنجاح"
         }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.post("/groups/search")
+async def search_groups(request: SearchGroupsRequest):
+    """
+    البحث العالمي عن مجموعات Telegram
+    """
+    try:
+        # إنشاء client من session_string
+        client = TelegramClient(
+            StringSession(request.session_string),
+            int(request.api_id),
+            request.api_hash
+        )
+        
+        await client.connect()
+        
+        if not await client.is_user_authorized():
+            raise HTTPException(status_code=401, detail="Session expired or invalid")
+        
+        # البحث العالمي
+        try:
+            limit = min(request.limit or 20, 100)  # حد أقصى 100
+            
+            # استخدام SearchGlobalRequest للبحث
+            result = await client(SearchGlobalRequest(
+                q=request.query,
+                filter=InputMessagesFilterEmpty(),
+                min_date=None,
+                max_date=None,
+                offset_rate=0,
+                offset_peer=None,
+                offset_id=0,
+                limit=limit
+            ))
+            
+            groups = []
+            seen_ids = set()
+            
+            # استخراج المجموعات من النتائج
+            for message in result.messages:
+                if not message.peer_id:
+                    continue
+                
+                # الحصول على معلومات المجموعة
+                peer = message.peer_id
+                
+                # فلترة المجموعات فقط إذا كان groups_only = True
+                if request.groups_only:
+                    # التحقق من نوع الـ peer
+                    if hasattr(peer, 'channel_id'):
+                        # قناة أو supergroup
+                        try:
+                            entity = await client.get_entity(peer)
+                            if hasattr(entity, 'broadcast') and entity.broadcast:
+                                # قناة وليست مجموعة
+                                continue
+                        except:
+                            continue
+                    elif not hasattr(peer, 'channel_id'):
+                        # ليس قناة ولا مجموعة
+                        continue
+                
+                # الحصول على معرف المجموعة
+                if hasattr(peer, 'channel_id'):
+                    group_id = peer.channel_id
+                else:
+                    continue
+                
+                # تجنب التكرار
+                if group_id in seen_ids:
+                    continue
+                seen_ids.add(group_id)
+                
+                try:
+                    # الحصول على معلومات المجموعة
+                    entity = await client.get_entity(peer)
+                    
+                    group_info = {
+                        "id": str(group_id),
+                        "group_id": group_id,
+                        "title": getattr(entity, 'title', 'Unknown'),
+                        "username": getattr(entity, 'username', None),
+                        "type": "channel" if getattr(entity, 'broadcast', False) else "supergroup",
+                        "members_count": getattr(entity, 'participants_count', 0),
+                        "description": getattr(entity, 'about', None),
+                        "is_public": getattr(entity, 'username', None) is not None,
+                        "verified": getattr(entity, 'verified', False),
+                        "invite_link": f"https://t.me/{entity.username}" if getattr(entity, 'username', None) else None
+                    }
+                    
+                    groups.append(group_info)
+                    
+                    # إذا وصلنا للحد المطلوب، توقف
+                    if len(groups) >= limit:
+                        break
+                        
+                except Exception as e:
+                    # تجاهل الأخطاء في جلب معلومات مجموعة معينة
+                    continue
+            
+            await client.disconnect()
+            
+            return {
+                "success": True,
+                "data": {
+                    "groups": groups,
+                    "total": len(groups),
+                    "query": request.query,
+                    "has_more": len(groups) >= limit,
+                    "search_metadata": {
+                        "timestamp": datetime.now().isoformat(),
+                        "api_version": "1.0",
+                        "results_per_page": limit
+                    }
+                }
+            }
+            
+        except FloodWaitError as e:
+            await client.disconnect()
+            raise HTTPException(
+                status_code=429,
+                detail=f"Telegram rate limit: Please wait {e.seconds} seconds before searching again."
+            )
+        except Exception as e:
+            await client.disconnect()
+            error_msg = str(e)
+            
+            # معالجة أخطاء محددة
+            if "flood" in error_msg.lower() or "rate limit" in error_msg.lower():
+                raise HTTPException(
+                    status_code=429,
+                    detail="Rate limit exceeded. Please wait before searching again."
+                )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to search groups: {error_msg}"
+                )
         
     except HTTPException:
         raise
