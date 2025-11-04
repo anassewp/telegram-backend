@@ -374,21 +374,67 @@ async def extract_members(request: ExtractMembersRequest):
             raise HTTPException(status_code=401, detail="Session expired or invalid")
         
         # البحث عن المجموعة
+        entity = None
+        group_id_int = int(request.group_id) if isinstance(request.group_id, (int, str)) and str(request.group_id).isdigit() else None
+        
         try:
-            # group_id قد يكون رقم (BIGINT) أو username
-            # نحاول كرقم أولاً، ثم كـ entity
-            try:
-                # إذا كان group_id رقم، نحوله إلى int
-                if isinstance(request.group_id, (int, str)) and str(request.group_id).isdigit():
-                    entity = await client.get_entity(int(request.group_id))
-                else:
-                    # إذا كان username أو entity
-                    entity = await client.get_entity(request.group_id)
-            except (ValueError, TypeError):
-                # إذا فشل، نحاول كـ entity مباشرة
-                entity = await client.get_entity(request.group_id)
+            # أولاً: نحاول البحث في dialogs المستخدم (للمجموعات التي هو عضو فيها)
+            if group_id_int:
+                try:
+                    dialogs = await client.get_dialogs(limit=200)
+                    for dialog in dialogs:
+                        if hasattr(dialog.entity, 'id') and dialog.entity.id == group_id_int:
+                            entity = dialog.entity
+                            print(f"Found group in dialogs: {getattr(entity, 'title', 'Unknown')} (ID: {entity.id})")
+                            break
+                except Exception as e:
+                    print(f"Warning: Could not search dialogs: {e}")
+            
+            # ثانياً: إذا لم نجدها في dialogs، نحاول username أو get_entity مباشرة
+            if not entity:
+                try:
+                    # إذا كان group_id ليس رقم، قد يكون username
+                    if not group_id_int:
+                        entity = await client.get_entity(request.group_id)
+                    else:
+                        # إذا كان رقم، نحاول استخدام InputPeerChannel
+                        # لكن نحتاج access_hash، لذلك نحاول get_entity أولاً
+                        # قد يعمل إذا كانت المجموعة في cache
+                        try:
+                            entity = await client.get_entity(group_id_int)
+                            # التحقق من أن النتيجة هي group/channel وليس user
+                            if not (hasattr(entity, 'megagroup') or hasattr(entity, 'broadcast')):
+                                entity = None
+                        except:
+                            pass
+                except Exception as e:
+                    print(f"Warning: Could not get entity directly: {e}")
+            
+            # ثالثاً: إذا لم نجدها، نحاول البحث في dialogs مرة أخرى بدون حد
+            if not entity and group_id_int:
+                try:
+                    dialogs = await client.get_dialogs()
+                    for dialog in dialogs:
+                        if hasattr(dialog.entity, 'id') and dialog.entity.id == group_id_int:
+                            entity = dialog.entity
+                            print(f"Found group in all dialogs: {getattr(entity, 'title', 'Unknown')} (ID: {entity.id})")
+                            break
+                except Exception as e:
+                    print(f"Warning: Could not search all dialogs: {e}")
+            
+            if not entity:
+                raise HTTPException(
+                    status_code=404, 
+                    detail=f"Group not found (group_id: {request.group_id}). Make sure you are a member of this group and it's in your dialogs."
+                )
+                
+        except HTTPException:
+            raise
         except Exception as e:
-            raise HTTPException(status_code=404, detail=f"Group not found (group_id: {request.group_id}): {str(e)}")
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Group not found (group_id: {request.group_id}): {str(e)}"
+            )
         
         # استخراج الأعضاء
         try:
