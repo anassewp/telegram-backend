@@ -565,31 +565,45 @@ async def search_groups(request: SearchGroupsRequest):
                 print(f"Warning: Could not fetch user dialogs: {e}")
             
             # استخدام SearchGlobalRequest للبحث - لكن هذا قد يعيد نتائج من مجموعات المستخدم
-            # لذلك سنستخدم طريقة مختلطة: البحث في الرسائل + فلترة قوية
-            result = await client(SearchGlobalRequest(
-                q=request.query,
-                filter=InputMessagesFilterEmpty(),
-                min_date=None,
-                max_date=None,
-                offset_rate=0,
-                offset_peer=InputPeerEmpty(),
-                offset_id=0,
-                limit=limit * 10  # جلب الكثير من النتائج للعثور على مجموعات عامة
-            ))
-            
-            print(f"Search returned {len(result.messages)} messages for query: {request.query}")
-            print(f"User has {len(user_group_ids)} groups in dialogs")
-            
-            # جمع جميع الـ peers من الرسائل
+            # لذلك سنبحث في عدة صفحات للحصول على المزيد من النتائج
             all_peers = {}
-            for message in result.messages:
-                if not message.peer_id:
-                    continue
-                peer = message.peer_id
-                if hasattr(peer, 'channel_id'):
-                    if peer.channel_id not in all_peers:
-                        all_peers[peer.channel_id] = peer
+            max_pages = 3  # البحث في 3 صفحات
+            messages_per_page = 100
             
+            for page in range(max_pages):
+                try:
+                    result = await client(SearchGlobalRequest(
+                        q=request.query,
+                        filter=InputMessagesFilterEmpty(),
+                        min_date=None,
+                        max_date=None,
+                        offset_rate=page * messages_per_page,  # offset للصفحات
+                        offset_peer=InputPeerEmpty(),
+                        offset_id=0,
+                        limit=messages_per_page
+                    ))
+                    
+                    print(f"Page {page + 1}: Search returned {len(result.messages)} messages")
+                    
+                    # جمع جميع الـ peers من الرسائل في هذه الصفحة
+                    for message in result.messages:
+                        if not message.peer_id:
+                            continue
+                        peer = message.peer_id
+                        if hasattr(peer, 'channel_id'):
+                            if peer.channel_id not in all_peers:
+                                all_peers[peer.channel_id] = peer
+                    
+                    # إذا لم تكن هناك رسائل أكثر، توقف
+                    if len(result.messages) < messages_per_page:
+                        break
+                        
+                except Exception as e:
+                    print(f"Error searching page {page + 1}: {e}")
+                    break
+            
+            print(f"Search returned total {sum(len(all_peers) for _ in [1])} unique channels/groups for query: {request.query}")
+            print(f"User has {len(user_group_ids)} groups in dialogs")
             print(f"Found {len(all_peers)} unique channels/groups in search results")
             
             groups = []
