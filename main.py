@@ -548,15 +548,20 @@ async def search_groups(request: SearchGroupsRequest):
         try:
             limit = min(request.limit or 20, 100)  # حد أقصى 100
             
-            # جلب dialogs المستخدم لاستبعاد المجموعات التي هو عضو فيها
-            user_dialogs = await client.get_dialogs()
+            # جلب dialogs المستخدم لاستبعاد المجموعات التي هو عضو فيها (اختياري - فقط إذا طلب المستخدم)
+            # ملاحظة: قد نريح هذا الشرط قليلاً إذا كانت النتائج قليلة
             user_group_ids = set()
-            for dialog in user_dialogs:
-                entity = dialog.entity
-                if hasattr(entity, 'id'):
-                    # حفظ معرفات المجموعات التي المستخدم عضو فيها
-                    if hasattr(entity, 'megagroup') or hasattr(entity, 'broadcast'):
-                        user_group_ids.add(entity.id)
+            try:
+                user_dialogs = await client.get_dialogs(limit=100)  # جلب أول 100 dialog فقط لتسريع العملية
+                for dialog in user_dialogs:
+                    entity = dialog.entity
+                    if hasattr(entity, 'id'):
+                        # حفظ معرفات المجموعات التي المستخدم عضو فيها
+                        if hasattr(entity, 'megagroup') or hasattr(entity, 'broadcast'):
+                            user_group_ids.add(entity.id)
+            except Exception as e:
+                # إذا فشل جلب dialogs، نتابع بدون فلترة
+                print(f"Warning: Could not fetch user dialogs: {e}")
             
             # استخدام SearchGlobalRequest للبحث
             result = await client(SearchGlobalRequest(
@@ -567,11 +572,17 @@ async def search_groups(request: SearchGroupsRequest):
                 offset_rate=0,
                 offset_peer=InputPeerEmpty(),
                 offset_id=0,
-                limit=limit * 3  # جلب المزيد لفلترة المجموعات العامة فقط
+                limit=limit * 5  # جلب المزيد لضمان وجود نتائج بعد الفلترة
             ))
+            
+            print(f"Search returned {len(result.messages)} messages for query: {request.query}")
+            print(f"User has {len(user_group_ids)} groups in dialogs")
             
             groups = []
             seen_ids = set()
+            skipped_no_username = 0
+            skipped_user_group = 0
+            skipped_broadcast = 0
             
             # استخراج المجموعات من النتائج
             for message in result.messages:
@@ -595,36 +606,45 @@ async def search_groups(request: SearchGroupsRequest):
                     # الحصول على معلومات المجموعة
                     entity = await client.get_entity(peer)
                     
-                    # فلترة: فقط المجموعات العامة (التي لها username) - البحث العالمي
-                    # استبعاد المجموعات الخاصة التي المستخدم عضو فيها
-                    if not hasattr(entity, 'username') or not entity.username:
-                        continue  # تخطي المجموعات الخاصة
+                    # فلترة: نحاول إعطاء الأولوية للمجموعات العامة (التي لها username)
+                    # لكن إذا كانت النتائج قليلة، قد نسمح ببعض المجموعات الأخرى
+                    has_username = hasattr(entity, 'username') and entity.username
                     
-                    # استبعاد المجموعات التي المستخدم عضو فيها (المجموعات المحلية)
+                    # إذا كانت المجموعة من مجموعات المستخدم، نتخطاها
                     if entity.id in user_group_ids:
+                        skipped_user_group += 1
                         continue  # تخطي المجموعات التي المستخدم عضو فيها
+                    
+                    # إذا لم يكن لها username، نتخطاها (نريد فقط المجموعات العامة للبحث العالمي)
+                    if not has_username:
+                        skipped_no_username += 1
+                        continue
                     
                     # فلترة: فقط المجموعات (supergroups) وليس القنوات إذا كان groups_only = True
                     if request.groups_only:
                         if hasattr(entity, 'broadcast') and entity.broadcast:
+                            skipped_broadcast += 1
                             continue  # تخطي القنوات، فقط المجموعات
                     
                     # الحصول على عدد الأعضاء الحقيقي
+                    # ملاحظة: GetFullChannelRequest قد يكون بطيئاً، لذلك نستخدمه فقط إذا كان متوفراً
                     members_count = 0
                     try:
-                        # محاولة جلب عدد الأعضاء من FullChannel للحصول على العدد الحقيقي
-                        try:
-                            full_channel = await client(GetFullChannelRequest(entity))
-                            if hasattr(full_channel, 'full_chat') and hasattr(full_channel.full_chat, 'participants_count'):
-                                members_count = full_channel.full_chat.participants_count
-                            elif hasattr(full_channel, 'full_chat') and hasattr(full_channel.full_chat, 'members_count'):
-                                members_count = full_channel.full_chat.members_count
-                        except:
-                            # إذا فشل GetFullChannelRequest، نحاول من entity مباشرة
-                            if hasattr(entity, 'participants_count') and entity.participants_count:
-                                members_count = entity.participants_count
-                            elif hasattr(entity, 'members_count') and entity.members_count:
-                                members_count = entity.members_count
+                        # محاولة سريعة من entity أولاً
+                        if hasattr(entity, 'participants_count') and entity.participants_count:
+                            members_count = entity.participants_count
+                        elif hasattr(entity, 'members_count') and entity.members_count:
+                            members_count = entity.members_count
+                        else:
+                            # فقط إذا لم يكن متوفراً، نحاول GetFullChannelRequest (أبطأ)
+                            try:
+                                full_channel = await client(GetFullChannelRequest(entity))
+                                if hasattr(full_channel, 'full_chat') and hasattr(full_channel.full_chat, 'participants_count'):
+                                    members_count = full_channel.full_chat.participants_count
+                                elif hasattr(full_channel, 'full_chat') and hasattr(full_channel.full_chat, 'members_count'):
+                                    members_count = full_channel.full_chat.members_count
+                            except:
+                                pass  # إذا فشل، نستخدم 0
                     except Exception as e:
                         # إذا فشل كل شيء، نستخدم 0
                         members_count = 0
@@ -656,6 +676,8 @@ async def search_groups(request: SearchGroupsRequest):
             
             await client.disconnect()
             
+            print(f"Search summary: Found {len(groups)} groups. Skipped: {skipped_no_username} no username, {skipped_user_group} user groups, {skipped_broadcast} channels")
+            
             return {
                 "success": True,
                 "data": {
@@ -666,7 +688,13 @@ async def search_groups(request: SearchGroupsRequest):
                     "search_metadata": {
                         "timestamp": datetime.now().isoformat(),
                         "api_version": "1.0",
-                        "results_per_page": limit
+                        "results_per_page": limit,
+                        "debug": {
+                            "total_messages": len(result.messages),
+                            "skipped_no_username": skipped_no_username,
+                            "skipped_user_group": skipped_user_group,
+                            "skipped_broadcast": skipped_broadcast
+                        }
                     }
                 }
             }
