@@ -870,68 +870,50 @@ export default function TelegramGroupsPage() {
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Search */}
-          <div>
-            <label className="block text-sm font-medium text-neutral-700 mb-2">البحث</label>
-            <div className="relative">
-              <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="ابحث عن مجموعة..."
-                className="w-full pr-10 pl-4 py-2 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-              />
-            </div>
-          </div>
-
-          {/* Type Filter */}
-          <div>
-            <label className="block text-sm font-medium text-neutral-700 mb-2">النوع</label>
-            <select
-              value={filterType}
-              onChange={(e) => setFilterType(e.target.value as any)}
-              className="w-full px-4 py-2 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-            >
-              <option value="all">الكل</option>
-              <option value="groups_only">مجموعات فقط (بدون قنوات)</option>
-              <option value="group">مجموعة</option>
-              <option value="supergroup">مجموعة كبيرة</option>
-              <option value="channel">قناة</option>
-            </select>
-          </div>
-
-          {/* Visible Members Filter */}
-          <div>
-            <label className="block text-sm font-medium text-neutral-700 mb-2">ظهور الأعضاء</label>
-            <select
-              value={filterVisibleMembers}
-              onChange={(e) => setFilterVisibleMembers(e.target.value as any)}
-              className="w-full px-4 py-2 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-            >
-              <option value="all">الكل</option>
-              <option value="fully_visible">أعضاء ظاهرين بالكامل</option>
-              <option value="admin_only">الإدمن فقط ظاهرين</option>
-              <option value="hidden">أعضاء مخفيين</option>
-            </select>
+        {/* Search */}
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-neutral-700 mb-2">البحث</label>
+          <div className="relative">
+            <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="ابحث عن مجموعة..."
+              className="w-full pr-10 pl-4 py-2 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+            />
           </div>
         </div>
 
         {/* Advanced Filters */}
         {showFilters && (
-          <div className="mt-4 pt-4 border-t border-neutral-200 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {/* Visible Members Filter */}
+            <div>
+              <label className="block text-sm font-medium text-neutral-700 mb-2">ظهور الأعضاء</label>
+              <select
+                value={filterVisibleMembers}
+                onChange={(e) => setFilterVisibleMembers(e.target.value as any)}
+                className="w-full px-3 py-2 text-sm border border-neutral-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              >
+                <option value="all">الكل</option>
+                <option value="fully_visible">أعضاء ظاهرين بالكامل</option>
+                <option value="admin_only">الإدمن فقط ظاهرين</option>
+                <option value="hidden">أعضاء مخفيين</option>
+              </select>
+            </div>
+
             {/* Privacy Filter */}
             <div>
-              <label className="block text-sm font-medium text-neutral-700 mb-2">النوع (خاصة/عامة)</label>
+              <label className="block text-sm font-medium text-neutral-700 mb-2">خاصة/عامة</label>
               <select
                 value={filterPrivacy}
                 onChange={(e) => setFilterPrivacy(e.target.value as any)}
-                className="w-full px-4 py-2 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                className="w-full px-3 py-2 text-sm border border-neutral-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
               >
                 <option value="all">الكل</option>
-                <option value="public">عامة (لها username)</option>
-                <option value="private">خاصة (بدون username)</option>
+                <option value="public">عامة</option>
+                <option value="private">خاصة</option>
               </select>
             </div>
 
@@ -941,7 +923,7 @@ export default function TelegramGroupsPage() {
               <select
                 value={filterCanSend}
                 onChange={(e) => setFilterCanSend(e.target.value as any)}
-                className="w-full px-4 py-2 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                className="w-full px-3 py-2 text-sm border border-neutral-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
               >
                 <option value="all">الكل</option>
                 <option value="yes">يمكن الإرسال</option>
@@ -955,7 +937,7 @@ export default function TelegramGroupsPage() {
               <select
                 value={filterRestricted}
                 onChange={(e) => setFilterRestricted(e.target.value as any)}
-                className="w-full px-4 py-2 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                className="w-full px-3 py-2 text-sm border border-neutral-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
               >
                 <option value="all">الكل</option>
                 <option value="no">غير مقيدة</option>
