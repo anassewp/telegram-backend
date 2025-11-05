@@ -1102,6 +1102,28 @@ async def search_groups(request: SearchGroupsRequest):
                         else:
                             members_visible = False
                     
+                    # التحقق من إمكانية الإرسال والمعلومات الإضافية
+                    try:
+                        # محاولة جلب معلومات كاملة للمجموعة
+                        if hasattr(entity, 'id'):
+                            try:
+                                full_info = await client(GetFullChannelRequest(entity))
+                                if hasattr(full_info, 'full_chat'):
+                                    full_chat = full_info.full_chat
+                                    # التحقق من أن المجموعة ليست مقيدة للإرسال
+                                    # يمكن إضافة المزيد من الفحوصات هنا
+                                    # ملاحظة: قد لا يكون هناك حقل مباشر للإرسال، لكن يمكن التحقق من permissions
+                            except:
+                                pass
+                        
+                        # التحقق من أن المجموعة ليست مغلقة (من خلال restricted)
+                        if is_restricted:
+                            # المجموعات المقيدة قد تكون مغلقة للإرسال
+                            can_send = False
+                    except Exception as e:
+                        # إذا فشل، نستخدم القيم الافتراضية
+                        pass
+                    
                     seen_ids.add(group_id)
                     
                     group_info = {
