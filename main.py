@@ -80,7 +80,7 @@ class SearchGroupsRequest(BaseModel):
     api_hash: str
     query: str
     limit: Optional[int] = 20
-    groups_only: Optional[bool] = True  # البحث في المجموعات فقط
+    groups_only: Optional[bool] = False  # البحث في جميع المجموعات والقنوات بدون قيود
 
 class JoinGroupRequest(BaseModel):
     session_string: str
@@ -433,17 +433,13 @@ async def import_groups(
         for dialog in dialogs:
             entity = dialog.entity
             
-            # فلترة: فقط المجموعات (supergroups) وليس القنوات
+            # استيراد جميع المجموعات والقنوات بدون أي فلترة
             # القنوات لها broadcast = True، المجموعات لها megagroup = True
             is_channel = getattr(entity, 'broadcast', False)
             is_megagroup = getattr(entity, 'megagroup', False)
             
-            # تخطي القنوات (channels)
-            if is_channel:
-                continue
-            
-            # فقط المجموعات (supergroups) أو المجموعات العادية
-            if is_megagroup or (hasattr(entity, 'id') and not is_channel):
+            # نستورد جميع dialogs التي هي مجموعات أو قنوات (بدون أي استثناء)
+            if is_megagroup or is_channel:
                 try:
                     # جلب معلومات أساسية
                     is_restricted = getattr(entity, 'restricted', False)
@@ -538,7 +534,13 @@ async def import_groups(
                         # إذا فشل، نفترض أنه يمكن الإرسال
                         pass
                     
-                    group_type = 'supergroup' if is_megagroup else 'group'
+                    # تحديد نوع المجموعة: supergroup, group, أو channel
+                    if is_channel:
+                        group_type = 'channel'
+                    elif is_megagroup:
+                        group_type = 'supergroup'
+                    else:
+                        group_type = 'group'
                     
                     groups.append({
                         "group_id": entity.id,
@@ -953,20 +955,9 @@ async def search_groups(request: SearchGroupsRequest):
         try:
             limit = min(request.limit or 20, 100)  # حد أقصى 100
             
-            # جلب dialogs المستخدم لاستبعاد المجموعات التي هو عضو فيها (اختياري - فقط إذا طلب المستخدم)
-            # ملاحظة: قد نريح هذا الشرط قليلاً إذا كانت النتائج قليلة
-            user_group_ids = set()
-            try:
-                user_dialogs = await client.get_dialogs(limit=100)  # جلب أول 100 dialog فقط لتسريع العملية
-                for dialog in user_dialogs:
-                    entity = dialog.entity
-                    if hasattr(entity, 'id'):
-                        # حفظ معرفات المجموعات التي المستخدم عضو فيها
-                        if hasattr(entity, 'megagroup') or hasattr(entity, 'broadcast'):
-                            user_group_ids.add(entity.id)
-            except Exception as e:
-                # إذا فشل جلب dialogs، نتابع بدون فلترة
-                print(f"Warning: Could not fetch user dialogs: {e}")
+            # ملاحظة: تم إزالة الفلترة - البحث في جميع المجموعات والقنوات بدون استبعاد
+            # البحث شامل بدون أي قيود أو تأخيرات
+            user_group_ids = set()  # محفوظ للتوافق مع الكود
             
             # البحث في عدة مصادر للحصول على نتائج أكثر
             all_peers = {}
@@ -1089,16 +1080,8 @@ async def search_groups(request: SearchGroupsRequest):
                     is_private = not has_username  # إذا لم يكن لها username، فهي خاصة
                     is_restricted = getattr(entity, 'restricted', False)
                     
-                    # إذا كانت المجموعة من مجموعات المستخدم، نتخطاها (لأنها موجودة بالفعل)
-                    if entity.id in user_group_ids:
-                        skipped_user_group += 1
-                        continue  # تخطي المجموعات التي المستخدم عضو فيها
-                    
-                    # فلترة: فقط المجموعات (supergroups) وليس القنوات إذا كان groups_only = True
-                    if request.groups_only:
-                        if hasattr(entity, 'broadcast') and entity.broadcast:
-                            skipped_broadcast += 1
-                            continue  # تخطي القنوات، فقط المجموعات
+                    # ملاحظة: تم إزالة الفلترة - البحث في جميع المجموعات والقنوات
+                    # لا نستبعد أي مجموعات أو قنوات
                     
                     # الحصول على عدد الأعضاء الحقيقي
                     members_count = 0
