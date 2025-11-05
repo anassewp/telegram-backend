@@ -195,7 +195,13 @@ Deno.serve(async (req) => {
                 username: group.username || null,
                 members_count: group.members_count || 0,
                 type: group.type || 'group',
-                is_active: true
+                is_active: true,
+                // الحقول الجديدة للفلترة
+                members_visible: group.members_visible !== undefined ? group.members_visible : true,
+                is_private: group.is_private !== undefined ? group.is_private : false,
+                is_restricted: group.is_restricted !== undefined ? group.is_restricted : false,
+                can_send: group.can_send !== undefined ? group.can_send : true,
+                is_closed: group.is_closed !== undefined ? group.is_closed : false
             };
 
             try {
