@@ -1084,23 +1084,41 @@ async def search_groups(request: SearchGroupsRequest):
                         members_count = 0
                     
                     # التحقق من إمكانية رؤية الأعضاء (بدون تخطي)
-                    members_visible = False
-                    can_send = True
+                    members_visible = False  # افتراضي: مخفيين
+                    can_send = True  # افتراضي: يمكن الإرسال
                     is_closed = False
                     
+                    # محاولة جلب أعضاء للتحقق من الصلاحيات
                     try:
-                        # محاولة جلب أول عضو واحد للتحقق من الصلاحيات
-                        async for user in client.iter_participants(entity, limit=1):
+                        participant_count = 0
+                        async for user in client.iter_participants(entity, limit=3):
                             if not user.bot:
-                                members_visible = True
-                                break
+                                participant_count += 1
+                                members_visible = True  # إذا استطعنا جلب عضو، يعني ظاهرين
+                                if participant_count >= 1:  # نحتاج فقط عضو واحد
+                                    break
                     except Exception as e:
                         error_msg = str(e).lower()
+                        print(f"Error checking members visibility for {getattr(entity, 'title', 'Unknown')}: {error_msg}")
                         # إذا كان الخطأ يتعلق بالصلاحيات، يعني الأعضاء مخفيين
-                        if 'permission' in error_msg or 'right' in error_msg or 'forbidden' in error_msg or 'not allowed' in error_msg:
+                        if any(keyword in error_msg for keyword in ['permission', 'right', 'forbidden', 'not allowed', 'admin', 'administrator']):
                             members_visible = False
                         else:
+                            # خطأ آخر، قد يكون network issue، نعتبره مخفيين للتحفظ
                             members_visible = False
+                    
+                    # التحقق من إمكانية الإرسال
+                    # ملاحظة: لا يمكن التحقق من الإرسال بدون محاولة إرسال فعلية
+                    # لكن يمكن التحقق من بعض المؤشرات:
+                    # 1. المجموعات المقيدة (restricted) قد تكون مغلقة
+                    # 2. القنوات (channels) تحتاج صلاحيات للإرسال
+                    if is_restricted:
+                        can_send = False
+                    
+                    # إذا كانت قناة (broadcast) وليست مجموعة، قد تكون الإرسال مقيد
+                    if hasattr(entity, 'broadcast') and entity.broadcast:
+                        # القنوات تحتاج صلاحيات للإرسال، لكن لا يمكن التحقق بدون محاولة
+                        can_send = True  # افتراضي: يمكن الإرسال (سيتم التحقق لاحقاً عند محاولة الإرسال)
                     
                     seen_ids.add(group_id)
                     
