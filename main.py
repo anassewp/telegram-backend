@@ -508,7 +508,8 @@ async def import_groups(
                         "username": getattr(entity, 'username', None),
                         "members_count": actual_members_count or participants_count or 0,
                         "type": group_type,
-                        "members_visible": members_visible,  # هل الأعضاء ظاهرين للجميع
+                        "members_visible": members_visible,  # للتوافق مع الكود القديم
+                        "members_visibility_type": members_visibility_type,  # 'fully_visible', 'admin_only', 'hidden'
                         "is_private": is_private,  # خاصة أو عامة
                         "is_restricted": is_restricted,  # مقيدة
                         "can_send": can_send,  # يمكن الإرسال
@@ -1083,28 +1084,70 @@ async def search_groups(request: SearchGroupsRequest):
                         # إذا فشل كل شيء، نستخدم 0
                         members_count = 0
                     
-                    # التحقق من إمكانية رؤية الأعضاء (بدون تخطي)
-                    members_visible = False  # افتراضي: مخفيين
+                    # التحقق من إمكانية رؤية الأعضاء بشكل دقيق
+                    # نقوم بفحص أول 30 عضو لتحديد نوع ظهور الأعضاء
+                    members_visible = False  # للتوافق مع الكود القديم
+                    members_visibility_type = 'hidden'  # 'fully_visible', 'admin_only', 'hidden'
                     can_send = True  # افتراضي: يمكن الإرسال
                     is_closed = False
                     
                     # محاولة جلب أعضاء للتحقق من الصلاحيات
                     try:
-                        participant_count = 0
-                        async for user in client.iter_participants(entity, limit=3):
+                        visible_participants_count = 0
+                        total_checked = 0
+                        check_limit = 30  # عدد الأعضاء للفحص
+                        
+                        async for user in client.iter_participants(entity, limit=check_limit):
+                            total_checked += 1
                             if not user.bot:
-                                participant_count += 1
-                                members_visible = True  # إذا استطعنا جلب عضو، يعني ظاهرين
-                                if participant_count >= 1:  # نحتاج فقط عضو واحد
-                                    break
+                                visible_participants_count += 1
+                        
+                        # تحديد نوع ظهور الأعضاء بناءً على النتائج
+                        if visible_participants_count == 0:
+                            # لم نستطع جلب أي عضو
+                            members_visibility_type = 'hidden'
+                            members_visible = False
+                        elif members_count > 500:
+                            # مجموعة كبيرة (> 500 عضو)
+                            if visible_participants_count >= 30:
+                                # تم جلب 30+ عضو → ظاهرين بالكامل
+                                members_visibility_type = 'fully_visible'
+                                members_visible = True
+                            elif 10 <= visible_participants_count < 30:
+                                # تم جلب 10-29 عضو فقط → الإدمن فقط
+                                members_visibility_type = 'admin_only'
+                                members_visible = True  # ظاهرين لكن للإدمن فقط
+                            else:
+                                # أقل من 10 أعضاء → محتمل أنها مخفية
+                                members_visibility_type = 'hidden'
+                                members_visible = False
+                        else:
+                            # مجموعة صغيرة (<= 500 عضو)
+                            if visible_participants_count >= min(30, members_count * 0.1):
+                                # تم جلب عدد كافٍ (30+ أو 10% على الأقل)
+                                members_visibility_type = 'fully_visible'
+                                members_visible = True
+                            elif visible_participants_count >= 5:
+                                # تم جلب 5-29 عضو → محتمل أن الإدمن فقط
+                                members_visibility_type = 'admin_only'
+                                members_visible = True
+                            else:
+                                # أقل من 5 أعضاء → مخفية
+                                members_visibility_type = 'hidden'
+                                members_visible = False
+                        
+                        print(f"Group: {getattr(entity, 'title', 'Unknown')}, Members: {members_count}, Visible: {visible_participants_count}, Type: {members_visibility_type}")
+                        
                     except Exception as e:
                         error_msg = str(e).lower()
                         print(f"Error checking members visibility for {getattr(entity, 'title', 'Unknown')}: {error_msg}")
                         # إذا كان الخطأ يتعلق بالصلاحيات، يعني الأعضاء مخفيين
                         if any(keyword in error_msg for keyword in ['permission', 'right', 'forbidden', 'not allowed', 'admin', 'administrator']):
+                            members_visibility_type = 'hidden'
                             members_visible = False
                         else:
                             # خطأ آخر، قد يكون network issue، نعتبره مخفيين للتحفظ
+                            members_visibility_type = 'hidden'
                             members_visible = False
                     
                     # التحقق من إمكانية الإرسال
@@ -1134,7 +1177,8 @@ async def search_groups(request: SearchGroupsRequest):
                         "verified": getattr(entity, 'verified', False),
                         "invite_link": f"https://t.me/{entity.username}" if entity.username else None,
                         # الحقول الجديدة للفلترة
-                        "members_visible": members_visible,
+                        "members_visible": members_visible,  # للتوافق مع الكود القديم
+                        "members_visibility_type": members_visibility_type,  # 'fully_visible', 'admin_only', 'hidden'
                         "is_private": is_private,
                         "is_restricted": is_restricted,
                         "can_send": can_send,
