@@ -29,6 +29,12 @@ interface TelegramGroup {
   members_count: number
   type: string
   session_id: string
+  members_visible?: boolean  // هل الأعضاء ظاهرين للجميع
+  has_visible_participants?: boolean  // للتوافق مع البيانات القديمة
+  is_private?: boolean  // خاصة أو عامة
+  is_restricted?: boolean  // مقيدة
+  can_send?: boolean  // يمكن الإرسال
+  is_closed?: boolean  // مغلقة
 }
 
 interface TelegramSession {
@@ -59,6 +65,13 @@ export default function MembersExtractionPage() {
   const [joiningGroup, setJoiningGroup] = useState<string | null>(null)
   const [userGroups, setUserGroups] = useState<Set<number>>(new Set()) // مجموعة IDs المجموعات التي المستخدم عضو فيها
   const [deletingGroup, setDeletingGroup] = useState<string | null>(null)
+  
+  // الفلاتر المتقدمة
+  const [filterVisibleMembers, setFilterVisibleMembers] = useState<'all' | 'visible' | 'hidden'>('all')
+  const [filterPrivacy, setFilterPrivacy] = useState<'all' | 'public' | 'private'>('all')
+  const [filterCanSend, setFilterCanSend] = useState<'all' | 'yes' | 'no'>('all')
+  const [filterRestricted, setFilterRestricted] = useState<'all' | 'yes' | 'no'>('all')
+  const [showFilters, setShowFilters] = useState(false)
 
   useEffect(() => {
     setMounted(true)
@@ -337,7 +350,7 @@ export default function MembersExtractionPage() {
         .from('telegram_members')
         .select('*')
         .eq('user_id', user.id)
-        .eq('group_id', group.telegram_group_id || group.group_id)
+        .eq('group_id', group.group_id)
 
       if (error) throw error
 
@@ -381,10 +394,95 @@ export default function MembersExtractionPage() {
     }
   }
 
-  const filteredGroups = groups.filter(group =>
-    group.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    group.username?.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  // فلترة متقدمة للمجموعات
+  useEffect(() => {
+    // سيتم تطبيق الفلترة في filteredGroups
+  }, [groups, searchQuery, filterVisibleMembers, filterPrivacy, filterCanSend, filterRestricted])
+
+  const applyFilters = () => {
+    let filtered = [...groups]
+
+    // Filter by search query
+    if (searchQuery) {
+      filtered = filtered.filter(group => 
+        group.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        group.username?.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+    }
+
+    // Filter by visible members (استخدام members_visible الجديد أولاً، ثم has_visible_participants للتوافق)
+    if (filterVisibleMembers === 'visible') {
+      filtered = filtered.filter(group => 
+        group.members_visible === true || 
+        (group.members_visible === undefined && group.has_visible_participants === true)
+      )
+    } else if (filterVisibleMembers === 'hidden') {
+      filtered = filtered.filter(group => 
+        group.members_visible === false || 
+        (group.members_visible === undefined && group.has_visible_participants === false)
+      )
+    }
+
+    // Filter by privacy (خاصة/عامة)
+    if (filterPrivacy === 'public') {
+      filtered = filtered.filter(group => 
+        group.is_private === false || 
+        (group.is_private === undefined && group.username !== null)
+      )
+    } else if (filterPrivacy === 'private') {
+      filtered = filtered.filter(group => 
+        group.is_private === true || 
+        (group.is_private === undefined && group.username === null)
+      )
+    }
+
+    // Filter by can send (يمكن الإرسال)
+    if (filterCanSend === 'yes') {
+      filtered = filtered.filter(group => 
+        group.can_send === true || 
+        (group.can_send === undefined && group.is_closed !== true && group.is_closed !== undefined)
+      )
+    } else if (filterCanSend === 'no') {
+      filtered = filtered.filter(group => 
+        group.can_send === false || 
+        (group.can_send === undefined && group.is_closed === true) ||
+        (group.is_closed === true)
+      )
+    }
+
+    // Filter by restricted (مقيدة)
+    if (filterRestricted === 'yes') {
+      filtered = filtered.filter(group => group.is_restricted === true)
+    } else if (filterRestricted === 'no') {
+      filtered = filtered.filter(group => 
+        group.is_restricted === false || 
+        group.is_restricted === undefined
+      )
+    }
+
+    console.log('🔍 Filtered groups:', {
+      total: groups.length,
+      filtered: filtered.length,
+      filters: {
+        visibleMembers: filterVisibleMembers,
+        privacy: filterPrivacy,
+        canSend: filterCanSend,
+        restricted: filterRestricted
+      },
+      sampleGroup: filtered[0] ? {
+        title: filtered[0].title,
+        members_visible: filtered[0].members_visible,
+        has_visible_participants: filtered[0].has_visible_participants,
+        is_private: filtered[0].is_private,
+        can_send: filtered[0].can_send,
+        is_restricted: filtered[0].is_restricted
+      } : null
+    })
+
+    return filtered
+  }
+
+  const filteredGroups = applyFilters()
 
   const stats = {
     total_extracted: groups.reduce((sum, g) => sum + g.extracted_members, 0),
@@ -514,6 +612,14 @@ export default function MembersExtractionPage() {
             </select>
           )}
           <button 
+            onClick={() => setShowFilters(!showFilters)}
+            className="flex items-center gap-2 px-6 py-3 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded-xl font-medium transition-colors"
+          >
+            <Filter className="w-5 h-5" />
+            <span>فلاتر متقدمة</span>
+            <ChevronDown className={`w-4 h-4 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
+          </button>
+          <button 
             onClick={fetchData}
             className="flex items-center gap-2 px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium transition-colors"
           >
@@ -521,6 +627,67 @@ export default function MembersExtractionPage() {
             <span>تحديث</span>
           </button>
         </div>
+
+        {/* Advanced Filters */}
+        {showFilters && (
+          <div className="mt-4 pt-4 border-t border-gray-200 grid grid-cols-1 md:grid-cols-4 gap-4">
+            {/* Visible Members Filter */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">ظهور الأعضاء</label>
+              <select
+                value={filterVisibleMembers}
+                onChange={(e) => setFilterVisibleMembers(e.target.value as any)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              >
+                <option value="all">الكل</option>
+                <option value="visible">أعضاء ظاهرين</option>
+                <option value="hidden">أعضاء مخفيين</option>
+              </select>
+            </div>
+
+            {/* Privacy Filter */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">خاصة/عامة</label>
+              <select
+                value={filterPrivacy}
+                onChange={(e) => setFilterPrivacy(e.target.value as any)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              >
+                <option value="all">الكل</option>
+                <option value="public">عامة (لها username)</option>
+                <option value="private">خاصة (بدون username)</option>
+              </select>
+            </div>
+
+            {/* Can Send Filter */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">يمكن الإرسال</label>
+              <select
+                value={filterCanSend}
+                onChange={(e) => setFilterCanSend(e.target.value as any)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              >
+                <option value="all">الكل</option>
+                <option value="yes">يمكن الإرسال</option>
+                <option value="no">مغلقة/لا يمكن الإرسال</option>
+              </select>
+            </div>
+
+            {/* Restricted Filter */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">مقيدة</label>
+              <select
+                value={filterRestricted}
+                onChange={(e) => setFilterRestricted(e.target.value as any)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              >
+                <option value="all">الكل</option>
+                <option value="no">غير مقيدة</option>
+                <option value="yes">مقيدة</option>
+              </select>
+            </div>
+          </div>
+        )}
         {sessions.length === 0 && (
           <div className="mt-4 bg-orange-50 border border-orange-200 rounded-xl p-4 text-center">
             <AlertCircle className="w-5 h-5 text-orange-600 mx-auto mb-2" />
@@ -532,7 +699,14 @@ export default function MembersExtractionPage() {
       {/* Groups List */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-xl font-bold text-gray-900">المجموعات المتاحة</h2>
+          <h2 className="text-xl font-bold text-gray-900">
+            المجموعات المتاحة
+            {filteredGroups.length !== groups.length && (
+              <span className="text-sm font-normal text-gray-500 mr-2">
+                ({filteredGroups.length} من {groups.length})
+              </span>
+            )}
+          </h2>
         </div>
 
         {filteredGroups.length === 0 ? (
@@ -567,10 +741,38 @@ export default function MembersExtractionPage() {
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                    <div className="flex items-center gap-2 text-sm text-gray-600 flex-wrap">
                       {group.username && <span>@{group.username}</span>}
                       {group.username && <span>•</span>}
                       <span>{group.members_count.toLocaleString()} عضو</span>
+                      {group.members_visible !== undefined && (
+                        <>
+                          <span>•</span>
+                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                            group.members_visible 
+                              ? 'bg-green-100 text-green-700' 
+                              : 'bg-orange-100 text-orange-700'
+                          }`}>
+                            {group.members_visible ? 'أعضاء ظاهرين' : 'أعضاء مخفيين'}
+                          </span>
+                        </>
+                      )}
+                      {group.is_private !== undefined && group.is_private && (
+                        <>
+                          <span>•</span>
+                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
+                            خاصة
+                          </span>
+                        </>
+                      )}
+                      {group.can_send !== undefined && !group.can_send && (
+                        <>
+                          <span>•</span>
+                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">
+                            مغلقة
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
