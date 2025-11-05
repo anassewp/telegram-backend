@@ -451,29 +451,7 @@ async def import_groups(
                     has_username = hasattr(entity, 'username') and entity.username is not None
                     is_private = not has_username  # إذا لم يكن لها username، فهي خاصة
                     
-                    # التحقق من إمكانية رؤية الأعضاء (بدون تخطي)
-                    can_see_members = False
-                    members_visible = False
-                    actual_members_count = participants_count
-                    
-                    try:
-                        # محاولة جلب أول عضو واحد للتحقق من الصلاحيات
-                        async for user in client.iter_participants(entity, limit=1):
-                            if not user.bot:
-                                can_see_members = True
-                                members_visible = True
-                                break
-                    except Exception as e:
-                        error_msg = str(e).lower()
-                        # إذا كان الخطأ يتعلق بالصلاحيات، يعني الأعضاء مخفيين
-                        if 'permission' in error_msg or 'right' in error_msg or 'forbidden' in error_msg or 'not allowed' in error_msg:
-                            members_visible = False
-                            can_see_members = False
-                        else:
-                            # خطأ آخر، نحاول معالجة
-                            members_visible = False
-                    
-                    # محاولة جلب العدد الحقيقي للأعضاء
+                    # محاولة جلب العدد الحقيقي للأعضاء أولاً (قبل الفحص)
                     try:
                         if hasattr(entity, 'id'):
                             full_info = await client(GetFullChannelRequest(entity))
@@ -481,6 +459,66 @@ async def import_groups(
                     except Exception as e:
                         # إذا فشل، نستخدم العدد من dialog
                         actual_members_count = participants_count
+                    
+                    # التحقق من إمكانية رؤية الأعضاء بشكل دقيق
+                    can_see_members = False
+                    members_visible = False  # للتوافق مع الكود القديم
+                    members_visibility_type = 'hidden'  # 'fully_visible', 'admin_only', 'hidden'
+                    
+                    try:
+                        # محاولة جلب أول 30 عضو لتحديد نوع ظهور الأعضاء
+                        visible_participants_count = 0
+                        total_checked = 0
+                        check_limit = 30
+                        
+                        async for user in client.iter_participants(entity, limit=check_limit):
+                            total_checked += 1
+                            if not user.bot:
+                                visible_participants_count += 1
+                        
+                        # تحديد نوع ظهور الأعضاء بناءً على النتائج
+                        if visible_participants_count == 0:
+                            members_visibility_type = 'hidden'
+                            members_visible = False
+                            can_see_members = False
+                        elif actual_members_count > 500:
+                            # مجموعة كبيرة
+                            if visible_participants_count >= 30:
+                                members_visibility_type = 'fully_visible'
+                                members_visible = True
+                                can_see_members = True
+                            elif 10 <= visible_participants_count < 30:
+                                members_visibility_type = 'admin_only'
+                                members_visible = True
+                                can_see_members = True
+                            else:
+                                members_visibility_type = 'hidden'
+                                members_visible = False
+                                can_see_members = False
+                        else:
+                            # مجموعة صغيرة
+                            if visible_participants_count >= min(30, actual_members_count * 0.1):
+                                members_visibility_type = 'fully_visible'
+                                members_visible = True
+                                can_see_members = True
+                            elif visible_participants_count >= 5:
+                                members_visibility_type = 'admin_only'
+                                members_visible = True
+                                can_see_members = True
+                            else:
+                                members_visibility_type = 'hidden'
+                                members_visible = False
+                                can_see_members = False
+                        
+                    except Exception as e:
+                        error_msg = str(e).lower()
+                        if 'permission' in error_msg or 'right' in error_msg or 'forbidden' in error_msg or 'not allowed' in error_msg:
+                            members_visibility_type = 'hidden'
+                            members_visible = False
+                            can_see_members = False
+                        else:
+                            members_visibility_type = 'hidden'
+                            members_visible = False
                     
                     # التحقق من إمكانية الإرسال (بدون إرسال فعلي)
                     can_send = True
