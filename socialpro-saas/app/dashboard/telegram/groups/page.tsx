@@ -36,7 +36,8 @@ interface TelegramGroup {
   type: 'group' | 'supergroup' | 'channel';
   is_active: boolean;
   has_visible_participants?: boolean;
-  members_visible?: boolean;  // هل الأعضاء ظاهرين للجميع
+  members_visible?: boolean;  // للتوافق مع الكود القديم
+  members_visibility_type?: 'fully_visible' | 'admin_only' | 'hidden';  // نوع ظهور الأعضاء
   is_private?: boolean;  // خاصة أو عامة
   is_restricted?: boolean;  // مقيدة
   can_send?: boolean;  // يمكن الإرسال
@@ -171,7 +172,7 @@ export default function TelegramGroupsPage() {
   
   // Filters for imported groups
   const [filterType, setFilterType] = useState<'all' | 'groups_only' | 'group' | 'supergroup' | 'channel'>('all');
-  const [filterVisibleMembers, setFilterVisibleMembers] = useState<'all' | 'visible' | 'hidden'>('all');
+  const [filterVisibleMembers, setFilterVisibleMembers] = useState<'all' | 'fully_visible' | 'admin_only' | 'hidden'>('all');
   const [filterPrivacy, setFilterPrivacy] = useState<'all' | 'public' | 'private'>('all');
   const [filterCanSend, setFilterCanSend] = useState<'all' | 'yes' | 'no'>('all');
   const [filterRestricted, setFilterRestricted] = useState<'all' | 'yes' | 'no'>('all');
@@ -397,17 +398,41 @@ export default function TelegramGroupsPage() {
       filtered = filtered.filter(group => group.type === filterType);
     }
 
-    // Filter by visible members (استخدام members_visible الجديد أولاً، ثم has_visible_participants للتوافق)
-    if (filterVisibleMembers === 'visible') {
-      filtered = filtered.filter(group => 
-        group.members_visible === true || 
-        (group.members_visible === undefined && group.has_visible_participants === true)
-      );
+    // Filter by visible members (using members_visibility_type)
+    if (filterVisibleMembers === 'fully_visible') {
+      filtered = filtered.filter(group => {
+        // استخدام members_visibility_type أولاً
+        if (group.members_visibility_type === 'fully_visible') {
+          return true;
+        }
+        // للتوافق مع الكود القديم
+        if (group.members_visibility_type === undefined && group.members_visible === true) {
+          return true;
+        }
+        if (group.members_visibility_type === undefined && group.members_visible === undefined && group.has_visible_participants === true) {
+          return true;
+        }
+        return false;
+      });
+    } else if (filterVisibleMembers === 'admin_only') {
+      filtered = filtered.filter(group => {
+        return group.members_visibility_type === 'admin_only';
+      });
     } else if (filterVisibleMembers === 'hidden') {
-      filtered = filtered.filter(group => 
-        group.members_visible === false || 
-        (group.members_visible === undefined && group.has_visible_participants === false)
-      );
+      filtered = filtered.filter(group => {
+        // استخدام members_visibility_type أولاً
+        if (group.members_visibility_type === 'hidden') {
+          return true;
+        }
+        // للتوافق مع الكود القديم
+        if (group.members_visibility_type === undefined && group.members_visible === false) {
+          return true;
+        }
+        if (group.members_visibility_type === undefined && group.members_visible === undefined && group.has_visible_participants === false) {
+          return true;
+        }
+        return false;
+      });
     }
 
     // Filter by privacy (خاصة/عامة)
