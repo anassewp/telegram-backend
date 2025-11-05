@@ -350,7 +350,7 @@ export default function MembersExtractionPage() {
         .from('telegram_members')
         .select('*')
         .eq('user_id', user.id)
-        .eq('group_id', group.telegram_group_id || group.group_id)
+        .eq('group_id', group.group_id)
 
       if (error) throw error
 
@@ -440,13 +440,13 @@ export default function MembersExtractionPage() {
     if (filterCanSend === 'yes') {
       filtered = filtered.filter(group => 
         group.can_send === true || 
-        (group.can_send === undefined && group.is_closed !== true)
+        (group.can_send === undefined && group.is_closed !== true && group.is_closed !== undefined)
       )
     } else if (filterCanSend === 'no') {
       filtered = filtered.filter(group => 
         group.can_send === false || 
-        group.is_closed === true ||
-        (group.can_send === undefined && group.is_closed === true)
+        (group.can_send === undefined && group.is_closed === true) ||
+        (group.is_closed === true)
       )
     }
 
