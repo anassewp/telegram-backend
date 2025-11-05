@@ -59,6 +59,10 @@ export default function MembersTransferPage() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [transferProgress, setTransferProgress] = useState(0)
+  const [selectedSessions, setSelectedSessions] = useState<string[]>([])
+  const [distributionStrategy, setDistributionStrategy] = useState<'equal' | 'round_robin' | 'random' | 'weighted'>('equal')
+  const [delayMin, setDelayMin] = useState(60)
+  const [delayMax, setDelayMax] = useState(120)
 
   useEffect(() => {
     setMounted(true)
@@ -150,6 +154,9 @@ export default function MembersTransferPage() {
       return
     }
 
+    // Use selected sessions or all sessions
+    const sessionIdsToUse = selectedSessions.length > 0 ? selectedSessions : sessions.map(s => s.id)
+
     setTransferring(true)
     setError('')
     setSuccess('')
@@ -177,14 +184,18 @@ export default function MembersTransferPage() {
         })
       }, 500)
 
-      // نقل الأعضاء عبر Edge Function
-      const { data, error: transferError } = await supabase.functions.invoke('telegram-transfer-members', {
+      // نقل الأعضاء عبر Edge Function الجديدة مع توزيع ذكي
+      const { data, error: transferError } = await supabase.functions.invoke('telegram-transfer-members-batch', {
         body: {
           user_id: user.id,
-          session_id: sessions[0].id, // استخدام أول جلسة نشطة
+          session_ids: sessionIdsToUse,
           source_group_id: sourceGroup.telegram_group_id || sourceGroup.group_id,
           target_group_id: targetGroup.telegram_group_id || targetGroup.group_id,
-          member_ids: selectedMembers
+          member_ids: selectedMembers,
+          distribution_strategy: distributionStrategy,
+          delay_min: delayMin,
+          delay_max: delayMax,
+          max_per_day_per_session: 50
         }
       })
 
@@ -195,6 +206,10 @@ export default function MembersTransferPage() {
 
       if (data?.error) {
         throw new Error(data.error.message || 'فشل في نقل الأعضاء')
+      }
+
+      if (!data?.success) {
+        throw new Error('فشل في نقل الأعضاء')
       }
 
       const transferred = data?.data?.total_transferred || 0
@@ -470,6 +485,93 @@ export default function MembersTransferPage() {
                 ))}
               </select>
               <ChevronDown className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+            </div>
+          </div>
+
+          {/* Advanced Settings */}
+          <div className="space-y-4 pt-4 border-t border-gray-200">
+            <h3 className="text-lg font-bold text-gray-900">إعدادات متقدمة</h3>
+            
+            {/* Sessions Selection */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                اختر الجلسات ({selectedSessions.length || sessions.length} جلسة)
+              </label>
+              <div className="max-h-40 overflow-y-auto border-2 border-gray-200 rounded-xl p-3 space-y-2">
+                {sessions.map((session) => (
+                  <label
+                    key={session.id}
+                    className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedSessions.length === 0 ? true : selectedSessions.includes(session.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          if (selectedSessions.length === 0) {
+                            // Select this session only (means user wants to use specific sessions)
+                            setSelectedSessions([session.id])
+                          } else {
+                            setSelectedSessions([...selectedSessions, session.id])
+                          }
+                        } else {
+                          const filtered = selectedSessions.filter(id => id !== session.id)
+                          setSelectedSessions(filtered.length === 0 ? [] : filtered)
+                        }
+                      }}
+                      className="w-4 h-4 text-indigo-600 rounded"
+                    />
+                    <div className="flex-1">
+                      <div className="font-medium text-gray-900 text-sm">{session.session_name}</div>
+                      <div className="text-xs text-gray-500">{session.phone}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500 mt-1">اتركه فارغاً لاستخدام جميع الجلسات</p>
+            </div>
+
+            {/* Distribution Strategy */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                استراتيجية التوزيع
+              </label>
+              <select
+                value={distributionStrategy}
+                onChange={(e) => setDistributionStrategy(e.target.value as any)}
+                className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+              >
+                <option value="equal">متساوي</option>
+                <option value="round_robin">دوري</option>
+                <option value="random">عشوائي</option>
+                <option value="weighted">مرجح</option>
+              </select>
+            </div>
+
+            {/* Delay Settings */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  الحد الأدنى للتأخير (ثانية)
+                </label>
+                <input
+                  type="number"
+                  value={delayMin}
+                  onChange={(e) => setDelayMin(parseInt(e.target.value) || 60)}
+                  className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  الحد الأقصى للتأخير (ثانية)
+                </label>
+                <input
+                  type="number"
+                  value={delayMax}
+                  onChange={(e) => setDelayMax(parseInt(e.target.value) || 120)}
+                  className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                />
+              </div>
             </div>
           </div>
 
