@@ -30,6 +30,7 @@ interface TelegramGroup {
   type: string
   session_id: string
   members_visible?: boolean  // هل الأعضاء ظاهرين للجميع
+  has_visible_participants?: boolean  // للتوافق مع البيانات القديمة
   is_private?: boolean  // خاصة أو عامة
   is_restricted?: boolean  // مقيدة
   can_send?: boolean  // يمكن الإرسال
@@ -409,67 +410,47 @@ export default function MembersExtractionPage() {
       )
     }
 
-    // Filter by visible members
+    // Filter by visible members (استخدام members_visible الجديد أولاً، ثم has_visible_participants للتوافق)
     if (filterVisibleMembers === 'visible') {
-      filtered = filtered.filter(group => {
-        if (group.members_visible !== undefined && group.members_visible !== null) {
-          return group.members_visible === true
-        }
-        return false
-      })
+      filtered = filtered.filter(group => 
+        group.members_visible === true || 
+        (group.members_visible === undefined && group.has_visible_participants === true)
+      )
     } else if (filterVisibleMembers === 'hidden') {
-      filtered = filtered.filter(group => {
-        return group.members_visible === false
-      })
+      filtered = filtered.filter(group => 
+        group.members_visible === false || 
+        (group.members_visible === undefined && group.has_visible_participants === false)
+      )
     }
 
-    // Filter by privacy
+    // Filter by privacy (خاصة/عامة)
     if (filterPrivacy === 'public') {
-      filtered = filtered.filter(group => {
-        if (group.is_private !== undefined) {
-          return group.is_private === false
-        }
-        return group.username !== null && group.username !== ''
-      })
+      filtered = filtered.filter(group => 
+        group.is_private === false || 
+        (group.is_private === undefined && group.username !== null)
+      )
     } else if (filterPrivacy === 'private') {
-      filtered = filtered.filter(group => {
-        if (group.is_private !== undefined) {
-          return group.is_private === true
-        }
-        return !group.username || group.username === ''
-      })
+      filtered = filtered.filter(group => 
+        group.is_private === true || 
+        (group.is_private === undefined && group.username === null)
+      )
     }
 
-    // Filter by can send
+    // Filter by can send (يمكن الإرسال)
     if (filterCanSend === 'yes') {
-      filtered = filtered.filter(group => {
-        if (group.can_send !== undefined && group.can_send !== null) {
-          return group.can_send === true
-        }
-        if (group.is_closed !== undefined && group.is_closed !== null) {
-          return group.is_closed === false
-        }
-        if (group.is_restricted !== undefined && group.is_restricted !== null) {
-          return group.is_restricted === false
-        }
-        return true
-      })
+      filtered = filtered.filter(group => 
+        group.can_send === true || 
+        (group.can_send === undefined && group.is_closed !== true)
+      )
     } else if (filterCanSend === 'no') {
-      filtered = filtered.filter(group => {
-        if (group.can_send !== undefined && group.can_send !== null) {
-          return group.can_send === false
-        }
-        if (group.is_closed !== undefined && group.is_closed !== null) {
-          return group.is_closed === true
-        }
-        if (group.is_restricted !== undefined && group.is_restricted !== null) {
-          return group.is_restricted === true
-        }
-        return false
-      })
+      filtered = filtered.filter(group => 
+        group.can_send === false || 
+        group.is_closed === true ||
+        (group.can_send === undefined && group.is_closed === true)
+      )
     }
 
-    // Filter by restricted
+    // Filter by restricted (مقيدة)
     if (filterRestricted === 'yes') {
       filtered = filtered.filter(group => group.is_restricted === true)
     } else if (filterRestricted === 'no') {
@@ -478,6 +459,25 @@ export default function MembersExtractionPage() {
         group.is_restricted === undefined
       )
     }
+
+    console.log('🔍 Filtered groups:', {
+      total: groups.length,
+      filtered: filtered.length,
+      filters: {
+        visibleMembers: filterVisibleMembers,
+        privacy: filterPrivacy,
+        canSend: filterCanSend,
+        restricted: filterRestricted
+      },
+      sampleGroup: filtered[0] ? {
+        title: filtered[0].title,
+        members_visible: filtered[0].members_visible,
+        has_visible_participants: filtered[0].has_visible_participants,
+        is_private: filtered[0].is_private,
+        can_send: filtered[0].can_send,
+        is_restricted: filtered[0].is_restricted
+      } : null
+    })
 
     return filtered
   }
