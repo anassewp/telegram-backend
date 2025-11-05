@@ -1,0 +1,676 @@
+{
+  "subscription_plans": {
+    "count": 4,
+    "data": [
+      {
+        "id": "f8b36f64-d054-4e9f-aad2-898762df3bce",
+        "name": "خطة مجانية",
+        "name_en": "Free Plan",
+        "slug": "free",
+        "price": 0.0,
+        "currency": "USD",
+        "billing_period": "lifetime",
+        "points_included": 100,
+        "is_active": true,
+        "sort_order": 1,
+        "features": {
+          "support": "basic",
+          "max_contacts": 100,
+          "max_campaigns": 5,
+          "max_platforms": 3
+        },
+        "created_at": "2025-11-01T15:26:48.383657+00:00",
+        "updated_at": "2025-11-01T15:26:48.383657+00:00"
+      },
+      {
+        "id": "16aa168e-06ce-48ab-a28d-092e0a58de7a",
+        "name": "خطة شهرية",
+        "name_en": "Monthly Plan",
+        "slug": "monthly",
+        "price": 29.99,
+        "currency": "USD",
+        "billing_period": "month",
+        "points_included": 1000,
+        "is_active": true,
+        "sort_order": 2,
+        "features": {
+          "support": "priority",
+          "analytics": true,
+          "max_contacts": 5000,
+          "max_campaigns": 50,
+          "max_platforms": 8
+        },
+        "created_at": "2025-11-01T15:26:48.383657+00:00",
+        "updated_at": "2025-11-01T15:26:48.383657+00:00"
+      },
+      {
+        "id": "1180dbab-74b8-49de-825e-4e0652b83ec7",
+        "name": "خطة سنوية",
+        "name_en": "Annual Plan",
+        "slug": "annual",
+        "price": 299.99,
+        "currency": "USD",
+        "billing_period": "year",
+        "points_included": 15000,
+        "is_active": true,
+        "sort_order": 3,
+        "features": {
+          "support": "premium",
+          "analytics": true,
+          "api_access": true,
+          "max_contacts": 50000,
+          "max_campaigns": 999,
+          "max_platforms": 12
+        },
+        "created_at": "2025-11-01T15:26:48.383657+00:00",
+        "updated_at": "2025-11-01T15:26:48.383657+00:00"
+      },
+      {
+        "id": "8110ea11-9c0c-4d9c-b8a9-69d49478d4ea",
+        "name": "خطة مدى الحياة",
+        "name_en": "Lifetime Plan",
+        "slug": "lifetime",
+        "price": 999.99,
+        "currency": "USD",
+        "billing_period": "lifetime",
+        "points_included": 100000,
+        "is_active": true,
+        "sort_order": 4,
+        "features": {
+          "support": "premium",
+          "analytics": true,
+          "api_access": true,
+          "white_label": true,
+          "max_contacts": 999999,
+          "max_campaigns": 9999,
+          "max_platforms": 12
+        },
+        "created_at": "2025-11-01T15:26:48.383657+00:00",
+        "updated_at": "2025-11-01T15:26:48.383657+00:00"
+      }
+    ]
+  },
+  "platforms": {
+    "count": 12,
+    "data": [
+      {
+        "id": "a2285345-2de3-4fac-a32e-b12a94743d57",
+        "name": "واتساب",
+        "name_en": "WhatsApp",
+        "slug": "whatsapp",
+        "icon_url": null,
+        "color": "#25D366",
+        "description": null,
+        "is_active": true,
+        "requires_premium": false,
+        "sort_order": 1,
+        "created_at": "2025-11-01T15:26:31.745594+00:00"
+      },
+      {
+        "id": "a04e68b2-caf8-47d4-a5ba-92cd90ab162e",
+        "name": "فيسبوك",
+        "name_en": "Facebook",
+        "slug": "facebook",
+        "icon_url": null,
+        "color": "#1877F2",
+        "description": null,
+        "is_active": true,
+        "requires_premium": false,
+        "sort_order": 2,
+        "created_at": "2025-11-01T15:26:31.745594+00:00"
+      },
+      {
+        "id": "63d4b498-0198-4bfc-9088-52df5252d1a3",
+        "name": "إنستغرام",
+        "name_en": "Instagram",
+        "slug": "instagram",
+        "icon_url": null,
+        "color": "#E4405F",
+        "description": null,
+        "is_active": true,
+        "requires_premium": false,
+        "sort_order": 3,
+        "created_at": "2025-11-01T15:26:31.745594+00:00"
+      },
+      {
+        "id": "b6260c71-4090-41c3-a66b-582075affae0",
+        "name": "تويتر / X",
+        "name_en": "Twitter/X",
+        "slug": "twitter",
+        "icon_url": null,
+        "color": "#000000",
+        "description": null,
+        "is_active": true,
+        "requires_premium": false,
+        "sort_order": 4,
+        "created_at": "2025-11-01T15:26:31.745594+00:00"
+      },
+      {
+        "id": "bfa2a880-7d7e-47aa-b145-6693f0fb678c",
+        "name": "تيليجرام",
+        "name_en": "Telegram",
+        "slug": "telegram",
+        "icon_url": null,
+        "color": "#26A5E4",
+        "description": null,
+        "is_active": true,
+        "requires_premium": false,
+        "sort_order": 5,
+        "created_at": "2025-11-01T15:26:31.745594+00:00"
+      },
+      {
+        "id": "6506fa43-be75-4943-9119-13a1d9d93656",
+        "name": "تيليجرام بريميوم",
+        "name_en": "Telegram Premium",
+        "slug": "telegram-premium",
+        "icon_url": null,
+        "color": "#26A5E4",
+        "description": null,
+        "is_active": true,
+        "requires_premium": true,
+        "sort_order": 6,
+        "created_at": "2025-11-01T15:26:31.745594+00:00"
+      },
+      {
+        "id": "83bdfcaa-47ef-4d1b-b435-b98ff01f022f",
+        "name": "لينكد إن",
+        "name_en": "LinkedIn",
+        "slug": "linkedin",
+        "icon_url": null,
+        "color": "#0A66C2",
+        "description": null,
+        "is_active": true,
+        "requires_premium": false,
+        "sort_order": 7,
+        "created_at": "2025-11-01T15:26:31.745594+00:00"
+      },
+      {
+        "id": "20204c97-58f3-4ce3-aa19-6e326a735685",
+        "name": "تيك توك",
+        "name_en": "TikTok",
+        "slug": "tiktok",
+        "icon_url": null,
+        "color": "#000000",
+        "description": null,
+        "is_active": true,
+        "requires_premium": false,
+        "sort_order": 8,
+        "created_at": "2025-11-01T15:26:31.745594+00:00"
+      },
+      {
+        "id": "03fe5861-2ba9-4868-9bfc-ff986ecd7162",
+        "name": "بينترست",
+        "name_en": "Pinterest",
+        "slug": "pinterest",
+        "icon_url": null,
+        "color": "#E60023",
+        "description": null,
+        "is_active": true,
+        "requires_premium": false,
+        "sort_order": 9,
+        "created_at": "2025-11-01T15:26:31.745594+00:00"
+      },
+      {
+        "id": "78409bee-a961-4973-b88e-2b7fcb6d8e4d",
+        "name": "ريديت",
+        "name_en": "Reddit",
+        "slug": "reddit",
+        "icon_url": null,
+        "color": "#FF4500",
+        "description": null,
+        "is_active": true,
+        "requires_premium": false,
+        "sort_order": 10,
+        "created_at": "2025-11-01T15:26:31.745594+00:00"
+      },
+      {
+        "id": "effe4203-7dfd-4677-ae9f-5405b362f60d",
+        "name": "سناب شات",
+        "name_en": "Snapchat",
+        "slug": "snapchat",
+        "icon_url": null,
+        "color": "#FFFC00",
+        "description": null,
+        "is_active": true,
+        "requires_premium": false,
+        "sort_order": 11,
+        "created_at": "2025-11-01T15:26:31.745594+00:00"
+      },
+      {
+        "id": "f5897566-ccc0-4054-9499-f04de69fb2c9",
+        "name": "X Plus",
+        "name_en": "X Plus",
+        "slug": "x-plus",
+        "icon_url": null,
+        "color": "#000000",
+        "description": null,
+        "is_active": true,
+        "requires_premium": true,
+        "sort_order": 12,
+        "created_at": "2025-11-01T15:26:31.745594+00:00"
+      }
+    ]
+  },
+  "features": {
+    "count": 12,
+    "data": [
+      {
+        "id": "31e7815a-68d5-482f-88ac-581453d9a304",
+        "name": "إدارة متعددة المنصات",
+        "name_en": "Multi-Platform Management",
+        "slug": "multi-platform",
+        "description": "إدارة حسابات متعددة من منصات مختلفة",
+        "icon": null,
+        "category": "core",
+        "is_active": true,
+        "created_at": "2025-11-01T15:27:04.784355+00:00"
+      },
+      {
+        "id": "e035941c-becd-4f1f-b728-28eb452b35ed",
+        "name": "جدولة المنشورات",
+        "name_en": "Post Scheduling",
+        "slug": "post-scheduling",
+        "description": "جدولة ونشر المحتوى تلقائياً",
+        "icon": null,
+        "category": "core",
+        "is_active": true,
+        "created_at": "2025-11-01T15:27:04.784355+00:00"
+      },
+      {
+        "id": "a23debf9-694b-4086-b2f2-e5f5b40f43d7",
+        "name": "تحليلات متقدمة",
+        "name_en": "Advanced Analytics",
+        "slug": "analytics",
+        "description": "تقارير وإحصائيات تفصيلية",
+        "icon": null,
+        "category": "analytics",
+        "is_active": true,
+        "created_at": "2025-11-01T15:27:04.784355+00:00"
+      },
+      {
+        "id": "ebd30d7a-324e-4618-9c38-127a942c6048",
+        "name": "رسائل جماعية",
+        "name_en": "Bulk Messaging",
+        "slug": "bulk-messaging",
+        "description": "إرسال رسائل لمجموعات كبيرة",
+        "icon": null,
+        "category": "messaging",
+        "is_active": true,
+        "created_at": "2025-11-01T15:27:04.784355+00:00"
+      },
+      {
+        "id": "23ceb0b1-afa9-43d6-a8d2-0ee10a261842",
+        "name": "إدارة جهات الاتصال",
+        "name_en": "Contact Management",
+        "slug": "contact-management",
+        "description": "نظام إدارة قاعدة بيانات العملاء",
+        "icon": null,
+        "category": "crm",
+        "is_active": true,
+        "created_at": "2025-11-01T15:27:04.784355+00:00"
+      },
+      {
+        "id": "808de81a-8665-4277-8afb-6b3a1143f742",
+        "name": "حملات تسويقية",
+        "name_en": "Marketing Campaigns",
+        "slug": "campaigns",
+        "description": "إنشاء وإدارة الحملات التسويقية",
+        "icon": null,
+        "category": "marketing",
+        "is_active": true,
+        "created_at": "2025-11-01T15:27:04.784355+00:00"
+      },
+      {
+        "id": "1ce0e47d-22c0-43e4-a813-b5588c6f0dd7",
+        "name": "دعم فني أولوية",
+        "name_en": "Priority Support",
+        "slug": "priority-support",
+        "description": "دعم فني على مدار الساعة",
+        "icon": null,
+        "category": "support",
+        "is_active": true,
+        "created_at": "2025-11-01T15:27:04.784355+00:00"
+      },
+      {
+        "id": "9a60af51-827e-48e9-8d59-26db928616d3",
+        "name": "واجهة برمجية API",
+        "name_en": "API Access",
+        "slug": "api-access",
+        "description": "الوصول إلى API للتكامل",
+        "icon": null,
+        "category": "integration",
+        "is_active": true,
+        "created_at": "2025-11-01T15:27:04.784355+00:00"
+      },
+      {
+        "id": "006a71aa-541b-47cd-88d4-b2183f6d301c",
+        "name": "تقارير مخصصة",
+        "name_en": "Custom Reports",
+        "slug": "custom-reports",
+        "description": "إنشاء تقارير حسب الطلب",
+        "icon": null,
+        "category": "analytics",
+        "is_active": true,
+        "created_at": "2025-11-01T15:27:04.784355+00:00"
+      },
+      {
+        "id": "7bcf2700-e37a-4ad5-9380-c2ee17f6eac8",
+        "name": "نظام النقاط",
+        "name_en": "Points System",
+        "slug": "points-system",
+        "description": "كسب واستخدام النقاط",
+        "icon": null,
+        "category": "rewards",
+        "is_active": true,
+        "created_at": "2025-11-01T15:27:04.784355+00:00"
+      },
+      {
+        "id": "07d570f3-b892-459d-87ad-4598607124e5",
+        "name": "تصدير البيانات",
+        "name_en": "Data Export",
+        "slug": "data-export",
+        "description": "تصدير البيانات بصيغ متعددة",
+        "icon": null,
+        "category": "data",
+        "is_active": true,
+        "created_at": "2025-11-01T15:27:04.784355+00:00"
+      },
+      {
+        "id": "2f59872b-b6dc-4a27-a842-6469b16ea0c5",
+        "name": "علامة تجارية مخصصة",
+        "name_en": "White Label",
+        "slug": "white-label",
+        "description": "تخصيص كامل للعلامة التجارية",
+        "icon": null,
+        "category": "branding",
+        "is_active": true,
+        "created_at": "2025-11-01T15:27:04.784355+00:00"
+      }
+    ]
+  },
+  "plan_features": {
+    "count": 35,
+    "data": [
+      {
+        "id": "ff9b8674-1fcb-4cf5-aaeb-6629bf1ba481",
+        "plan_id": "f8b36f64-d054-4e9f-aad2-898762df3bce",
+        "feature_id": "31e7815a-68d5-482f-88ac-581453d9a304",
+        "feature_value": "3 platforms",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "a2ea562b-1672-4808-b3c3-edeeb5bcaa81",
+        "plan_id": "f8b36f64-d054-4e9f-aad2-898762df3bce",
+        "feature_id": "23ceb0b1-afa9-43d6-a8d2-0ee10a261842",
+        "feature_value": "100 contacts",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "72b9669a-b416-4d43-846c-3d7e028dbc0b",
+        "plan_id": "f8b36f64-d054-4e9f-aad2-898762df3bce",
+        "feature_id": "7bcf2700-e37a-4ad5-9380-c2ee17f6eac8",
+        "feature_value": "enabled",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "a22d4b13-2e1e-4eee-a3cf-0abf937c3be3",
+        "plan_id": "16aa168e-06ce-48ab-a28d-092e0a58de7a",
+        "feature_id": "31e7815a-68d5-482f-88ac-581453d9a304",
+        "feature_value": "8 platforms",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "7974bcca-cc92-49e4-a8d9-d91235b7b754",
+        "plan_id": "16aa168e-06ce-48ab-a28d-092e0a58de7a",
+        "feature_id": "e035941c-becd-4f1f-b728-28eb452b35ed",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "aeda59e3-949b-473b-96f8-fd5cfad26d04",
+        "plan_id": "16aa168e-06ce-48ab-a28d-092e0a58de7a",
+        "feature_id": "a23debf9-694b-4086-b2f2-e5f5b40f43d7",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "7295578f-cf35-4ad7-ba94-0a4e6f744b27",
+        "plan_id": "16aa168e-06ce-48ab-a28d-092e0a58de7a",
+        "feature_id": "ebd30d7a-324e-4618-9c38-127a942c6048",
+        "feature_value": "1000/day",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "293020f5-1fb8-4936-bae4-815413bd247c",
+        "plan_id": "16aa168e-06ce-48ab-a28d-092e0a58de7a",
+        "feature_id": "23ceb0b1-afa9-43d6-a8d2-0ee10a261842",
+        "feature_value": "5000 contacts",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "3b165010-5aa6-47a6-be4b-ec5be99ec60a",
+        "plan_id": "16aa168e-06ce-48ab-a28d-092e0a58de7a",
+        "feature_id": "808de81a-8665-4277-8afb-6b3a1143f742",
+        "feature_value": "50 campaigns",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "87b3989e-6bd9-4342-a1f5-8b257d9588cd",
+        "plan_id": "16aa168e-06ce-48ab-a28d-092e0a58de7a",
+        "feature_id": "1ce0e47d-22c0-43e4-a813-b5588c6f0dd7",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "727f5bea-2530-4e39-97ee-ce4604b79089",
+        "plan_id": "16aa168e-06ce-48ab-a28d-092e0a58de7a",
+        "feature_id": "7bcf2700-e37a-4ad5-9380-c2ee17f6eac8",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "3deb4c52-f6d1-470e-84c1-df634ec56d58",
+        "plan_id": "16aa168e-06ce-48ab-a28d-092e0a58de7a",
+        "feature_id": "07d570f3-b892-459d-87ad-4598607124e5",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "35303e86-d408-4195-b28d-bc73ecabe226",
+        "plan_id": "1180dbab-74b8-49de-825e-4e0652b83ec7",
+        "feature_id": "31e7815a-68d5-482f-88ac-581453d9a304",
+        "feature_value": "12 platforms",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "35dd63fe-beb4-480b-9e51-5ba43d47f0c1",
+        "plan_id": "1180dbab-74b8-49de-825e-4e0652b83ec7",
+        "feature_id": "e035941c-becd-4f1f-b728-28eb452b35ed",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "6066c633-eb22-44ec-a959-a65c4e0ccd9f",
+        "plan_id": "1180dbab-74b8-49de-825e-4e0652b83ec7",
+        "feature_id": "a23debf9-694b-4086-b2f2-e5f5b40f43d7",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "b77c8a8a-28fb-4a6d-a9bb-b056da239b6e",
+        "plan_id": "1180dbab-74b8-49de-825e-4e0652b83ec7",
+        "feature_id": "ebd30d7a-324e-4618-9c38-127a942c6048",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "d109b4eb-1a7d-4524-bbdd-ebab2cfda75b",
+        "plan_id": "1180dbab-74b8-49de-825e-4e0652b83ec7",
+        "feature_id": "23ceb0b1-afa9-43d6-a8d2-0ee10a261842",
+        "feature_value": "50000 contacts",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "caadbaff-c9d6-4441-b2e3-5e5dc2a0a7a3",
+        "plan_id": "1180dbab-74b8-49de-825e-4e0652b83ec7",
+        "feature_id": "808de81a-8665-4277-8afb-6b3a1143f742",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "b8ba0c68-5c6b-457d-ab80-36cd6f91d1c2",
+        "plan_id": "1180dbab-74b8-49de-825e-4e0652b83ec7",
+        "feature_id": "1ce0e47d-22c0-43e4-a813-b5588c6f0dd7",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "ebc59e62-ca61-4ee7-9b86-7d6f360b8b1b",
+        "plan_id": "1180dbab-74b8-49de-825e-4e0652b83ec7",
+        "feature_id": "9a60af51-827e-48e9-8d59-26db928616d3",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "b93719e2-3f2f-4e39-a484-62a4c83a92ed",
+        "plan_id": "1180dbab-74b8-49de-825e-4e0652b83ec7",
+        "feature_id": "006a71aa-541b-47cd-88d4-b2183f6d301c",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "eef66b9c-ed96-433b-baf1-6e126aeeef62",
+        "plan_id": "1180dbab-74b8-49de-825e-4e0652b83ec7",
+        "feature_id": "7bcf2700-e37a-4ad5-9380-c2ee17f6eac8",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "12660712-1650-40fe-88d0-dc3d52243b93",
+        "plan_id": "1180dbab-74b8-49de-825e-4e0652b83ec7",
+        "feature_id": "07d570f3-b892-459d-87ad-4598607124e5",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "0dc753f5-fd80-41c3-aa21-678eee52e081",
+        "plan_id": "8110ea11-9c0c-4d9c-b8a9-69d49478d4ea",
+        "feature_id": "31e7815a-68d5-482f-88ac-581453d9a304",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "a8aad5a6-f3dc-4c71-b4b4-c8c336cd95a3",
+        "plan_id": "8110ea11-9c0c-4d9c-b8a9-69d49478d4ea",
+        "feature_id": "e035941c-becd-4f1f-b728-28eb452b35ed",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "440fdc8f-b9ed-4276-a36e-980dfde667ba",
+        "plan_id": "8110ea11-9c0c-4d9c-b8a9-69d49478d4ea",
+        "feature_id": "a23debf9-694b-4086-b2f2-e5f5b40f43d7",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "c075b214-204e-41d0-80aa-b597119be1c0",
+        "plan_id": "8110ea11-9c0c-4d9c-b8a9-69d49478d4ea",
+        "feature_id": "ebd30d7a-324e-4618-9c38-127a942c6048",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "6c93331d-8f27-4b2c-a4c1-1f6a8035eb70",
+        "plan_id": "8110ea11-9c0c-4d9c-b8a9-69d49478d4ea",
+        "feature_id": "23ceb0b1-afa9-43d6-a8d2-0ee10a261842",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "98a01086-9814-4bc1-8c6c-743bf4c4b3df",
+        "plan_id": "8110ea11-9c0c-4d9c-b8a9-69d49478d4ea",
+        "feature_id": "808de81a-8665-4277-8afb-6b3a1143f742",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "fb3b3841-26f7-4ae3-84a1-7add4bc4abd6",
+        "plan_id": "8110ea11-9c0c-4d9c-b8a9-69d49478d4ea",
+        "feature_id": "1ce0e47d-22c0-43e4-a813-b5588c6f0dd7",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "0a76a986-3da3-4333-9ad1-4227fb577b97",
+        "plan_id": "8110ea11-9c0c-4d9c-b8a9-69d49478d4ea",
+        "feature_id": "9a60af51-827e-48e9-8d59-26db928616d3",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "3f201a43-18ac-4722-8049-98bc880a3578",
+        "plan_id": "8110ea11-9c0c-4d9c-b8a9-69d49478d4ea",
+        "feature_id": "006a71aa-541b-47cd-88d4-b2183f6d301c",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "f1713c26-e469-42f6-a6f1-beeb3692cfb9",
+        "plan_id": "8110ea11-9c0c-4d9c-b8a9-69d49478d4ea",
+        "feature_id": "7bcf2700-e37a-4ad5-9380-c2ee17f6eac8",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "11fd11b7-1d78-4f81-af8e-27f58b1eb464",
+        "plan_id": "8110ea11-9c0c-4d9c-b8a9-69d49478d4ea",
+        "feature_id": "07d570f3-b892-459d-87ad-4598607124e5",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      },
+      {
+        "id": "0c530d3f-8d83-4ede-89b5-648f0407a67b",
+        "plan_id": "8110ea11-9c0c-4d9c-b8a9-69d49478d4ea",
+        "feature_id": "2f59872b-b6dc-4a27-a842-6469b16ea0c5",
+        "feature_value": "unlimited",
+        "is_enabled": true,
+        "created_at": "2025-11-01T15:27:27.770912+00:00"
+      }
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+/workspace/telegram-backend
+total 34
+drwxr-xr-x+  3 minimax minimax 4096 Nov  2 07:38 .
+drwxr-xr-x+ 15 minimax minimax 4096 Nov  2 07:39 ..
+-rw-r-xr--+  1 root    root      34 Nov  2 07:15 .env.example
+drwxr-xr-x+  7 minimax minimax 4096 Nov  2 07:39 .git
+-rw-r-xr--+  1 minimax minimax  417 Nov  2 07:38 .gitignore
+-rw-r-xr--+  1 root    root    1612 Nov  2 07:25 DEPLOY.md
+-rw-r-xr--+  1 root    root    5024 Nov  2 07:15 README.md
+-rw-r-xr--+  1 root    root    6128 Nov  2 07:15 main.py
+-rw-r-xr--+  1 root    root      97 Nov  2 07:15 requirements.txt
+On branch master
+
+No commits yet
+
+Changes to be committed:
+  (use "git rm --cached <file>..." to unstage)
+	new file:   .env.example
+	new file:   .gitignore
+	new file:   DEPLOY.md
+	new file:   README.md
+	new file:   main.py
+	new file:   requirements.txt
+
