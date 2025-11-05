@@ -192,6 +192,127 @@ export default function TelegramGroupsPage() {
     applyFilters();
   }, [groups, searchQuery, filterType, filterVisibleMembers, filterPrivacy, filterCanSend, filterRestricted, activeSessionFilter]);
 
+  // فلترة نتائج البحث
+  useEffect(() => {
+    if (searchResults.length === 0) {
+      setFilteredSearchResults([]);
+      return;
+    }
+
+    console.log('🔍 Starting filter with:', {
+      totalResults: searchResults.length,
+      filters: {
+        visibleMembers: searchFilterVisibleMembers,
+        privacy: searchFilterPrivacy,
+        canSend: searchFilterCanSend,
+        restricted: searchFilterRestricted
+      },
+      sampleGroup: searchResults[0] ? {
+        title: searchResults[0].title,
+        members_visible: searchResults[0].members_visible,
+        is_private: searchResults[0].is_private,
+        can_send: searchResults[0].can_send,
+        is_closed: searchResults[0].is_closed
+      } : null
+    });
+
+    let filtered = [...searchResults];
+
+    // Filter by visible members
+    if (searchFilterVisibleMembers === 'visible') {
+      filtered = filtered.filter(group => {
+        // إذا كان الحقل موجود، استخدمه
+        if (group.members_visible !== undefined && group.members_visible !== null) {
+          return group.members_visible === true;
+        }
+        // إذا لم يكن موجود، لا نضعه في النتائج (لأننا لا نعرف حالته)
+        return false;
+      });
+    } else if (searchFilterVisibleMembers === 'hidden') {
+      filtered = filtered.filter(group => {
+        // فقط إذا كان الحقل موجود و false
+        return group.members_visible === false;
+      });
+    }
+
+    // Filter by privacy
+    if (searchFilterPrivacy === 'public') {
+      filtered = filtered.filter(group => {
+        if (group.is_private !== undefined) {
+          return group.is_private === false;
+        }
+        // إذا لم يكن موجود، نستخدم username كدليل
+        return group.username !== null && group.username !== '';
+      });
+    } else if (searchFilterPrivacy === 'private') {
+      filtered = filtered.filter(group => {
+        if (group.is_private !== undefined) {
+          return group.is_private === true;
+        }
+        // إذا لم يكن موجود، نستخدم username كدليل
+        return !group.username || group.username === '';
+      });
+    }
+
+    // Filter by can send
+    if (searchFilterCanSend === 'yes') {
+      filtered = filtered.filter(group => {
+        // إذا كان الحقل موجود، استخدمه
+        if (group.can_send !== undefined && group.can_send !== null) {
+          return group.can_send === true;
+        }
+        // إذا كان is_closed موجود، نستخدمه
+        if (group.is_closed !== undefined && group.is_closed !== null) {
+          return group.is_closed === false;
+        }
+        // إذا لم يكن موجود، نعتبره يمكن الإرسال (افتراضي)
+        return true;
+      });
+    } else if (searchFilterCanSend === 'no') {
+      filtered = filtered.filter(group => {
+        // إذا كان can_send موجود و false
+        if (group.can_send !== undefined && group.can_send !== null) {
+          return group.can_send === false;
+        }
+        // إذا كان is_closed موجود و true
+        if (group.is_closed !== undefined && group.is_closed !== null) {
+          return group.is_closed === true;
+        }
+        // إذا لم يكن موجود، لا نضعه في النتائج (لأننا لا نعرف حالته)
+        return false;
+      });
+    }
+
+    // Filter by restricted
+    if (searchFilterRestricted === 'yes') {
+      filtered = filtered.filter(group => group.is_restricted === true);
+    } else if (searchFilterRestricted === 'no') {
+      filtered = filtered.filter(group => 
+        group.is_restricted === false || 
+        group.is_restricted === undefined
+      );
+    }
+
+    console.log('🔍 Filtered search results:', {
+      total: searchResults.length,
+      filtered: filtered.length,
+      filters: {
+        visibleMembers: searchFilterVisibleMembers,
+        privacy: searchFilterPrivacy,
+        canSend: searchFilterCanSend,
+        restricted: searchFilterRestricted
+      },
+      sampleFiltered: filtered[0] ? {
+        title: filtered[0].title,
+        members_visible: filtered[0].members_visible,
+        is_private: filtered[0].is_private,
+        can_send: filtered[0].can_send
+      } : null
+    });
+
+    setFilteredSearchResults(filtered);
+  }, [searchResults, searchFilterVisibleMembers, searchFilterPrivacy, searchFilterCanSend, searchFilterRestricted]);
+
   const fetchData = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -245,30 +366,52 @@ export default function TelegramGroupsPage() {
 
     // Filter by visible members (استخدام members_visible الجديد أولاً، ثم has_visible_participants للتوافق)
     if (filterVisibleMembers === 'visible') {
-      filtered = filtered.filter(group => group.members_visible === true || group.has_visible_participants === true);
+      filtered = filtered.filter(group => 
+        group.members_visible === true || 
+        (group.members_visible === undefined && group.has_visible_participants === true)
+      );
     } else if (filterVisibleMembers === 'hidden') {
-      filtered = filtered.filter(group => group.members_visible === false || group.has_visible_participants === false);
+      filtered = filtered.filter(group => 
+        group.members_visible === false || 
+        (group.members_visible === undefined && group.has_visible_participants === false)
+      );
     }
 
     // Filter by privacy (خاصة/عامة)
     if (filterPrivacy === 'public') {
-      filtered = filtered.filter(group => group.is_private === false);
+      filtered = filtered.filter(group => 
+        group.is_private === false || 
+        (group.is_private === undefined && group.username !== null)
+      );
     } else if (filterPrivacy === 'private') {
-      filtered = filtered.filter(group => group.is_private === true);
+      filtered = filtered.filter(group => 
+        group.is_private === true || 
+        (group.is_private === undefined && group.username === null)
+      );
     }
 
     // Filter by can send (يمكن الإرسال)
     if (filterCanSend === 'yes') {
-      filtered = filtered.filter(group => group.can_send === true);
+      filtered = filtered.filter(group => 
+        group.can_send === true || 
+        (group.can_send === undefined && group.is_closed !== true)
+      );
     } else if (filterCanSend === 'no') {
-      filtered = filtered.filter(group => group.can_send === false || group.is_closed === true);
+      filtered = filtered.filter(group => 
+        group.can_send === false || 
+        group.is_closed === true ||
+        (group.can_send === undefined && group.is_closed === true)
+      );
     }
 
     // Filter by restricted (مقيدة)
     if (filterRestricted === 'yes') {
       filtered = filtered.filter(group => group.is_restricted === true);
     } else if (filterRestricted === 'no') {
-      filtered = filtered.filter(group => group.is_restricted === false);
+      filtered = filtered.filter(group => 
+        group.is_restricted === false || 
+        group.is_restricted === undefined
+      );
     }
 
     setFilteredGroups(filtered);
@@ -1244,7 +1387,10 @@ export default function TelegramGroupsPage() {
                 </div>
                 <div>
                   <h3 className="text-xl font-bold text-neutral-900">نتائج البحث</h3>
-                  <p className="text-sm text-neutral-600">تم العثور على {searchResults.length} مجموعة</p>
+                  <p className="text-sm text-neutral-600">
+                    {filteredSearchResults.length} من {searchResults.length} مجموعة
+                    {filteredSearchResults.length !== searchResults.length && ' (بعد الفلترة)'}
+                  </p>
                 </div>
               </div>
               <button
@@ -1442,7 +1588,7 @@ export default function TelegramGroupsPage() {
                   </div>
                 </div>
               ))
-              )}
+            )}
             </div>
 
             {/* Actions */}
