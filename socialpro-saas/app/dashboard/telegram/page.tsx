@@ -58,7 +58,7 @@ export default function TelegramHome() {
         .eq('user_id', user.id)
 
       const totalSessions = sessions?.length || 0
-      const activeSessions = sessions?.filter(s => s.is_active).length || 0
+      const activeSessions = sessions?.filter(s => s.status === 'active').length || 0
 
       // جلب إحصائيات المجموعات
       const { data: groups } = await supabase

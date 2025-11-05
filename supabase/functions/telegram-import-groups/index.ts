@@ -45,42 +45,100 @@ Deno.serve(async (req) => {
         }
 
         console.log(`استيراد ${groups.length} مجموعة للمستخدم: ${user_id}`);
+        console.log('Sample group data:', JSON.stringify(groups[0] || {}, null, 2));
 
         // Validate and prepare group data
         const validGroups = groups.filter(group => {
-            return group && 
-                   group.id && 
-                   group.title && 
-                   group.username &&
-                   (group.type === 'group' || group.type === 'supergroup' || group.type === 'channel');
+            // التحقق من وجود الحقول الأساسية
+            const hasId = group && (group.id || group.group_id);
+            const hasTitle = group && group.title;
+            // username قد يكون null لكن يجب أن يكون موجوداً في object
+            const hasUsername = group && 'username' in group;
+            
+            return hasId && hasTitle && hasUsername;
         });
 
         if (validGroups.length === 0) {
+            console.error('No valid groups found. First group:', groups[0]);
             throw new Error('لا توجد مجموعات صالحة للاستيراد - No valid groups to import');
         }
 
         console.log(`تم التحقق من ${validGroups.length} مجموعة صالحة للاستيراد`);
 
+        // الحصول على أول جلسة نشطة للمستخدم (للمجموعات المستوردة من البحث)
+        // session_id مطلوب في قاعدة البيانات، لذلك يجب أن نجد جلسة نشطة
+        let defaultSessionId = null;
+        try {
+            const sessionResponse = await fetch(
+                `${SUPABASE_URL}/rest/v1/telegram_sessions?user_id=eq.${user_id}&status=eq.active&limit=1`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+                        'apikey': SUPABASE_SERVICE_ROLE_KEY,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+            
+            if (sessionResponse.ok) {
+                const sessions = await sessionResponse.json();
+                if (sessions && sessions.length > 0) {
+                    defaultSessionId = sessions[0].id;
+                    console.log(`Using default session: ${defaultSessionId}`);
+                } else {
+                    // إذا لم توجد جلسة نشطة، نحاول أي جلسة
+                    const anySessionResponse = await fetch(
+                        `${SUPABASE_URL}/rest/v1/telegram_sessions?user_id=eq.${user_id}&limit=1`,
+                        {
+                            headers: {
+                                'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+                                'apikey': SUPABASE_SERVICE_ROLE_KEY,
+                                'Content-Type': 'application/json'
+                            }
+                        }
+                    );
+                    
+                    if (anySessionResponse.ok) {
+                        const anySessions = await anySessionResponse.json();
+                        if (anySessions && anySessions.length > 0) {
+                            defaultSessionId = anySessions[0].id;
+                            console.log(`Using any available session: ${defaultSessionId}`);
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('Could not fetch default session:', e);
+        }
+        
+        if (!defaultSessionId) {
+            throw new Error('لا توجد جلسة Telegram نشطة. يرجى إضافة جلسة أولاً من صفحة "إدارة الجلسات"');
+        }
+
         // Prepare group records for database insertion
-        const groupRecords = validGroups.map(group => ({
-            telegram_group_id: group.id,
-            title: group.title,
-            username: group.username,
-            type: group.type,
-            description: group.description || '',
-            members_count: group.members_count || 0,
-            photo_url: group.photo || '',
-            is_public: group.is_public !== false,
-            verified: group.verified || false,
-            invite_link: group.invite_link || group.invitations_link || `https://t.me/${group.username}`,
-            language: group.language || 'unknown',
-            region: group.region || 'unknown',
-            category: group.category || 'General',
-            imported_by: user_id,
-            import_status: 'pending',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-        }));
+        const groupRecords = validGroups.map(group => {
+            // استخدام group_id إذا كان موجوداً، وإلا استخدم id
+            const groupId = group.group_id || group.id;
+            // تحويل group_id إلى number إذا كان string
+            let telegramGroupId: number;
+            if (typeof groupId === 'string') {
+                const parsed = parseInt(groupId);
+                telegramGroupId = isNaN(parsed) ? 0 : parsed;
+            } else {
+                telegramGroupId = groupId;
+            }
+            
+            return {
+                user_id: user_id,
+                session_id: defaultSessionId,  // session_id مطلوب في قاعدة البيانات
+                group_id: telegramGroupId,
+                title: group.title,
+                username: group.username || null,
+                type: group.type || 'supergroup',
+                members_count: group.members_count || 0,
+                is_active: true
+            };
+        });
 
         // Insert groups into database using service role key
         const insertResponse = await fetch(`${SUPABASE_URL}/rest/v1/telegram_groups`, {
@@ -103,28 +161,7 @@ Deno.serve(async (req) => {
         const insertedGroups = await insertResponse.json();
         console.log(`تم استيراد ${insertedGroups.length} مجموعة بنجاح`);
 
-        // Update import status for all groups
-        const updatePromises = insertedGroups.map(async (group) => {
-            const updateResponse = await fetch(`${SUPABASE_URL}/rest/v1/telegram_groups?id=eq.${group.id}`, {
-                method: 'PATCH',
-                headers: {
-                    'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-                    'apikey': SUPABASE_SERVICE_ROLE_KEY,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    import_status: 'imported',
-                    imported_at: new Date().toISOString(),
-                    updated_at: new Date().toISOString()
-                })
-            });
-
-            if (!updateResponse.ok) {
-                console.warn(`فشل في تحديث حالة المجموعة ${group.id}`);
-            }
-        });
-
-        await Promise.all(updatePromises);
+        // لا حاجة لتحديث import_status لأن schema الجديد لا يحتوي على هذا الحقل
 
         // Simulate processing delay
         await new Promise(resolve => setTimeout(resolve, 200));

@@ -16,16 +16,19 @@ import {
   FileSpreadsheet,
   Database,
   X,
-  Loader2
+  Loader2,
+  LogIn,
+  Trash2
 } from 'lucide-react'
 
 interface TelegramGroup {
   id: string
-  telegram_group_id: number
+  group_id: number  // الحقل الصحيح من جدول telegram_groups
   title: string
   username: string | null
   members_count: number
   type: string
+  session_id: string
 }
 
 interface TelegramSession {
@@ -53,6 +56,9 @@ export default function MembersExtractionPage() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
+  const [joiningGroup, setJoiningGroup] = useState<string | null>(null)
+  const [userGroups, setUserGroups] = useState<Set<number>>(new Set()) // مجموعة IDs المجموعات التي المستخدم عضو فيها
+  const [deletingGroup, setDeletingGroup] = useState<string | null>(null)
 
   useEffect(() => {
     setMounted(true)
@@ -76,21 +82,27 @@ export default function MembersExtractionPage() {
       // جلب عدد الأعضاء المستخرجين لكل مجموعة
       const groupsWithExtraction: GroupWithExtraction[] = await Promise.all(
         (groupsData || []).map(async (group) => {
+          // استخدام group_id من جدول telegram_groups
+          const groupId = group.group_id
+
           const { count } = await supabase
             .from('telegram_members')
             .select('*', { count: 'exact', head: true })
             .eq('user_id', user.id)
-            .eq('group_id', group.telegram_group_id || group.group_id)
+            .eq('group_id', groupId)
 
-          // جلب آخر تاريخ استخراج
-          const { data: lastExtraction } = await supabase
+          // جلب آخر تاريخ استخراج (بدون .single() لأن قد لا يوجد سجل)
+          const { data: lastExtractionData } = await supabase
             .from('telegram_members')
             .select('extracted_at')
             .eq('user_id', user.id)
-            .eq('group_id', group.telegram_group_id || group.group_id)
+            .eq('group_id', groupId)
             .order('extracted_at', { ascending: false })
             .limit(1)
-            .single()
+
+          const lastExtraction = lastExtractionData && lastExtractionData.length > 0 
+            ? lastExtractionData[0] 
+            : null
 
           return {
             ...group,
@@ -156,7 +168,7 @@ export default function MembersExtractionPage() {
         body: {
           user_id: user.id,
           session_id: selectedSession,
-          group_id: selectedGroup.telegram_group_id || selectedGroup.group_id,
+          group_id: selectedGroup.group_id,
           limit: 1000 // حد أقصى 1000 عضو
         }
       })
@@ -186,6 +198,120 @@ export default function MembersExtractionPage() {
       setExtractionProgress(0)
     } finally {
       setExtracting(false)
+    }
+  }
+
+  const checkUserGroups = async (userId: string, sessionId?: string) => {
+    // هذه الوظيفة ستحاول جلب dialogs من جلسة واحدة للتحقق من المجموعات
+    // يمكن تحسينها لاحقاً لجلب جميع dialogs من جميع الجلسات
+    if (!sessionId) return
+
+    try {
+      // يمكن إضافة Edge Function لجلب dialogs، لكن حالياً سنعتمد على محاولة الاستخراج
+      // أو يمكننا إضافة flag في قاعدة البيانات
+      // الآن سنتركها فارغة وستتم تحديثها عند محاولة الاستخراج
+    } catch (err) {
+      console.error('Error checking user groups:', err)
+    }
+  }
+
+  const handleJoinGroup = async (group: GroupWithExtraction) => {
+    if (!selectedSession) {
+      setError('الرجاء اختيار جلسة أولاً')
+      return
+    }
+
+    setJoiningGroup(group.id)
+    setError('')
+    setSuccess('')
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('المستخدم غير مسجل الدخول')
+
+      const selectedSessionData = sessions.find(s => s.id === selectedSession)
+      if (!selectedSessionData) throw new Error('الجلسة غير موجودة')
+
+      // الانضمام للمجموعة عبر Edge Function
+      const { data, error: joinError } = await supabase.functions.invoke('telegram-join-group', {
+        body: {
+          user_id: user.id,
+          session_id: selectedSession,
+          group_id: group.group_id,
+          username: group.username || null
+        }
+      })
+
+      if (joinError) throw joinError
+
+      if (data?.error) {
+        throw new Error(data.error.message || 'فشل في الانضمام للمجموعة')
+      }
+
+      if (data?.data?.success) {
+        setSuccess(`تم الانضمام بنجاح إلى: ${data.data.group_title}`)
+        // إضافة المجموعة إلى قائمة المجموعات التي المستخدم عضو فيها
+        setUserGroups(prev => new Set([...prev, group.group_id]))
+        // إعادة تحميل البيانات بعد ثانية
+        setTimeout(() => {
+          fetchData()
+        }, 1000)
+      } else {
+        throw new Error('فشل في الانضمام للمجموعة')
+      }
+    } catch (err: any) {
+      console.error('Error joining group:', err)
+      setError(err.message || 'حدث خطأ أثناء الانضمام للمجموعة')
+    } finally {
+      setJoiningGroup(null)
+    }
+  }
+
+  const handleDeleteGroup = async (group: GroupWithExtraction) => {
+    if (!confirm(`هل أنت متأكد من حذف المجموعة "${group.title}" وجميع الأعضاء المستخرجين منها؟\n\nسيتم حذف ${group.extracted_members.toLocaleString()} عضو.`)) {
+      return
+    }
+
+    setDeletingGroup(group.id)
+    setError('')
+    setSuccess('')
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('المستخدم غير مسجل الدخول')
+
+      // أولاً: حذف جميع الأعضاء المرتبطين بهذه المجموعة
+      const { error: membersError } = await supabase
+        .from('telegram_members')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('group_id', group.group_id)
+
+      if (membersError) {
+        console.error('Error deleting members:', membersError)
+        // نتابع حتى لو فشل حذف الأعضاء (قد لا يكون هناك أعضاء)
+      }
+
+      // ثانياً: حذف المجموعة
+      const { error: groupError } = await supabase
+        .from('telegram_groups')
+        .delete()
+        .eq('id', group.id)
+        .eq('user_id', user.id)
+
+      if (groupError) throw groupError
+
+      setSuccess(`تم حذف المجموعة "${group.title}" وجميع أعضائها بنجاح`)
+      
+      // إعادة تحميل البيانات بعد ثانية
+      setTimeout(() => {
+        fetchData()
+      }, 1000)
+    } catch (err: any) {
+      console.error('Error deleting group:', err)
+      setError(err.message || 'حدث خطأ أثناء حذف المجموعة')
+    } finally {
+      setDeletingGroup(null)
     }
   }
 
@@ -361,6 +487,20 @@ export default function MembersExtractionPage() {
               className="w-full pr-12 pl-4 py-3 border-2 border-gray-200 rounded-xl focus:border-green-500 focus:outline-none transition-colors"
             />
           </div>
+          {sessions.length > 0 && (
+            <select
+              value={selectedSession}
+              onChange={(e) => setSelectedSession(e.target.value)}
+              className="px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-green-500 focus:outline-none transition-colors min-w-[200px]"
+            >
+              <option value="">-- اختر جلسة --</option>
+              {sessions.map((session) => (
+                <option key={session.id} value={session.id}>
+                  {session.session_name} ({session.phone})
+                </option>
+              ))}
+            </select>
+          )}
           <button 
             onClick={fetchData}
             className="flex items-center gap-2 px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium transition-colors"
@@ -369,6 +509,12 @@ export default function MembersExtractionPage() {
             <span>تحديث</span>
           </button>
         </div>
+        {sessions.length === 0 && (
+          <div className="mt-4 bg-orange-50 border border-orange-200 rounded-xl p-4 text-center">
+            <AlertCircle className="w-5 h-5 text-orange-600 mx-auto mb-2" />
+            <p className="text-orange-700 text-sm">لا توجد جلسات نشطة. أضف جلسة من صفحة الجلسات للانضمام للمجموعات.</p>
+          </div>
+        )}
       </div>
 
       {/* Groups List */}
@@ -435,6 +581,9 @@ export default function MembersExtractionPage() {
                       <div className="flex items-center gap-2 text-gray-500">
                         <AlertCircle className="w-5 h-5" />
                         <span className="text-sm">لم يتم الاستخراج بعد</span>
+                        {!userGroups.has(group.group_id) && group.username && (
+                          <span className="text-xs text-purple-600 mr-2">• تحتاج للانضمام أولاً</span>
+                        )}
                       </div>
                     )}
                   </div>
@@ -449,6 +598,27 @@ export default function MembersExtractionPage() {
                         <span>تصدير CSV</span>
                       </button>
                     )}
+                    {/* زر الانضمام - يظهر فقط إذا لم يكن المستخدم عضواً في المجموعة */}
+                    {!userGroups.has(group.group_id) && group.username && (
+                      <button
+                        onClick={() => handleJoinGroup(group)}
+                        disabled={joiningGroup === group.id || !selectedSession}
+                        className="px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white hover:shadow-lg rounded-lg font-medium transition-all text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title={!selectedSession ? 'اختر جلسة أولاً' : 'انضم للمجموعة'}
+                      >
+                        {joiningGroup === group.id ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>جاري الانضمام...</span>
+                          </>
+                        ) : (
+                          <>
+                            <LogIn className="w-4 h-4" />
+                            <span>انضمام</span>
+                          </>
+                        )}
+                      </button>
+                    )}
                     <button
                       onClick={() => {
                         setSelectedGroup(group)
@@ -457,11 +627,25 @@ export default function MembersExtractionPage() {
                         setError('')
                         setSuccess('')
                       }}
-                      disabled={extracting}
-                      className="px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:shadow-lg rounded-lg font-medium transition-all text-sm flex items-center gap-2 disabled:opacity-50"
+                      disabled={extracting || (!userGroups.has(group.group_id) && !group.username)}
+                      className="px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:shadow-lg rounded-lg font-medium transition-all text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      title={!userGroups.has(group.group_id) && !group.username ? 'يجب الانضمام للمجموعة أولاً' : ''}
                     >
                       <UserPlus className="w-4 h-4" />
                       <span>{group.extracted_members > 0 ? 'إعادة الاستخراج' : 'استخراج الأعضاء'}</span>
+                    </button>
+                    {/* زر الحذف */}
+                    <button
+                      onClick={() => handleDeleteGroup(group)}
+                      disabled={deletingGroup === group.id}
+                      className="px-3 py-2 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg font-medium transition-colors text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="حذف المجموعة وجميع أعضائها"
+                    >
+                      {deletingGroup === group.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="w-4 h-4" />
+                      )}
                     </button>
                   </div>
                 </div>

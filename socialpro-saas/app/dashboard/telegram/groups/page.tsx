@@ -306,12 +306,23 @@ export default function TelegramGroupsPage() {
     setError('');
 
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('المستخدم غير مسجل الدخول');
+
+      const selectedSession = sessions.find(s => s.id === selectedSessionId);
+      if (!selectedSession) throw new Error('الجلسة غير موجودة');
+
       // البحث العالمي في Telegram باستخدام Edge Function
       const { data, error } = await supabase.functions.invoke('telegram-search-groups', {
         body: {
           query: searchKeyword,
-          limit: 10,
-          offset: 0
+          limit: 20,
+          offset: 0,
+          session_id: selectedSession.id,
+          user_id: user.id,
+          api_id: selectedSession.api_id,
+          api_hash: selectedSession.api_hash,
+          session_string: selectedSession.session_string
         }
       });
 
@@ -323,8 +334,8 @@ export default function TelegramGroupsPage() {
       if (data?.data?.groups && Array.isArray(data.data.groups)) {
         // تحويل البيانات من الـ API إلى التنسيق المتوقع
         const realResults: SearchResult[] = data.data.groups.map((group: any) => ({
-          id: group.id,
-          title: group.title,
+          id: String(group.id || group.group_id || Math.random().toString(36).substr(2, 9)),
+          title: group.title || 'Unknown',
           username: group.username || null,
           members_count: group.members_count || 0,
           type: group.type === 'channel' ? 'channel' : 

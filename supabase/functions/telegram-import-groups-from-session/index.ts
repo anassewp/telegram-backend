@@ -110,45 +110,94 @@ Deno.serve(async (req) => {
 
         console.log(`تم جلب ${backendData.groups.length} مجموعة من Backend`);
 
-        // حفظ المجموعات في قاعدة البيانات
-        const groupRecords = backendData.groups.map((group: any) => ({
-            user_id: user_id,
-            session_id: session_id,
-            group_id: group.group_id,
-            title: group.title || '',
-            username: group.username || null,
-            members_count: group.members_count || 0,
-            type: group.type || 'group',
-            is_active: true
-        }));
-
-        // إدراج المجموعات في قاعدة البيانات
-        const insertResponse = await fetch(`${SUPABASE_URL}/rest/v1/telegram_groups`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-                'apikey': SUPABASE_SERVICE_ROLE_KEY,
-                'Content-Type': 'application/json',
-                'Prefer': 'return=representation'
-            },
-            body: JSON.stringify(groupRecords)
+        // تصفية المجموعات: فقط المجموعات (supergroups/groups) وليس القنوات
+        const filteredGroups = backendData.groups.filter((group: any) => {
+            // تخطي القنوات (channels)
+            if (group.type === 'channel' || group.type === 'broadcast') {
+                console.log(`تخطي القناة: ${group.title} (type: ${group.type})`);
+                return false;
+            }
+            // فقط المجموعات (supergroups أو groups)
+            return group.type === 'supergroup' || group.type === 'group';
         });
 
-        if (!insertResponse.ok) {
-            const errorText = await insertResponse.text();
-            console.error('خطأ في قاعدة البيانات:', errorText);
-            throw new Error(`فشل في حفظ المجموعات: ${errorText}`);
+        console.log(`بعد التصفية: ${filteredGroups.length} مجموعة (تم استبعاد القنوات)`);
+
+        if (filteredGroups.length === 0) {
+            return new Response(JSON.stringify({
+                success: true,
+                groups: [],
+                total: 0,
+                message: 'لم يتم العثور على مجموعات (تم استبعاد القنوات)'
+            }), {
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            });
         }
 
-        const insertedGroups = await insertResponse.json();
-        console.log(`تم استيراد ${insertedGroups.length} مجموعة بنجاح`);
+        // حفظ المجموعات في قاعدة البيانات (مع معالجة التكرارات)
+        let insertedCount = 0;
+        let skippedCount = 0;
+        const insertedGroups: any[] = [];
+
+        // إدراج المجموعات واحدة تلو الأخرى لتجنب التكرارات
+        for (const group of filteredGroups) {
+            const groupRecord = {
+                user_id: user_id,
+                session_id: session_id,
+                group_id: group.group_id,
+                title: group.title || '',
+                username: group.username || null,
+                members_count: group.members_count || 0,
+                type: group.type || 'group',
+                is_active: true
+            };
+
+            try {
+                // محاولة الإدراج
+                const insertResponse = await fetch(`${SUPABASE_URL}/rest/v1/telegram_groups`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+                        'apikey': SUPABASE_SERVICE_ROLE_KEY,
+                        'Content-Type': 'application/json',
+                        'Prefer': 'return=representation'
+                    },
+                    body: JSON.stringify(groupRecord)
+                });
+
+                if (insertResponse.ok) {
+                    const inserted = await insertResponse.json();
+                    insertedGroups.push(inserted[0] || inserted);
+                    insertedCount++;
+                } else {
+                    const errorText = await insertResponse.text();
+                    // إذا كان الخطأ بسبب التكرار (23505)، نتخطى المجموعة
+                    if (errorText.includes('23505') || errorText.includes('duplicate key') || errorText.includes('already exists')) {
+                        skippedCount++;
+                        console.log(`تم تخطي المجموعة المكررة: ${group.title} (group_id: ${group.group_id})`);
+                    } else {
+                        console.error(`خطأ في إدراج مجموعة ${group.title}:`, errorText);
+                        // يمكنك اختيار إما إلقاء خطأ أو تخطي المجموعة
+                        // سأختار التخطي لتجنب إيقاف العملية بالكامل
+                        skippedCount++;
+                    }
+                }
+            } catch (error) {
+                console.error(`خطأ في إدراج مجموعة ${group.title}:`, error);
+                skippedCount++;
+            }
+        }
+
+        console.log(`تم إدراج ${insertedCount} مجموعة، تم تخطي ${skippedCount} مجموعة`);
 
         // Return success response
         const response = {
             success: true,
             groups: insertedGroups,
             total: insertedGroups.length,
-            message: `تم استيراد ${insertedGroups.length} مجموعة بنجاح`
+            inserted: insertedCount,
+            skipped: skippedCount,
+            message: `تم استيراد ${insertedCount} مجموعة بنجاح${skippedCount > 0 ? ` (تم تخطي ${skippedCount} مجموعة مكررة)` : ''}`
         };
 
         return new Response(JSON.stringify(response), {
