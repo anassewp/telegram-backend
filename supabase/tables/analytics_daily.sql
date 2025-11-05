@@ -1,0 +1,20 @@
+CREATE TABLE analytics_daily (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    account_id UUID REFERENCES social_accounts(id) ON DELETE CASCADE,
+    metric_date DATE NOT NULL,
+    follower_count INTEGER DEFAULT 0,
+    following_count INTEGER DEFAULT 0,
+    post_count INTEGER DEFAULT 0,
+    total_impressions INTEGER DEFAULT 0,
+    total_engagement INTEGER DEFAULT 0,
+    avg_engagement_rate DECIMAL(5,2) DEFAULT 0,
+    reach_growth_rate DECIMAL(5,2) DEFAULT 0,
+    follower_growth_rate DECIMAL(5,2) DEFAULT 0,
+    top_post_id UUID,
+    top_post_performance JSONB,
+    best_posting_times JSONB,
+    audience_insights JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);

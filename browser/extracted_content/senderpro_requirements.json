@@ -1,0 +1,36 @@
+📄 Extracted from page: متطلبات التشغيل - سيندر برو
+URL: https://senderprov.com/requirements
+
+Extracted content:
+```json
+{
+    "title": "متطلبات التشغيل - سيندر برو",
+    "url": "https://senderprov.com/requirements",
+    "summary": "توضح هذه الصفحة متطلبات التشغيل والمواصفات اللازمة لتشغيل برنامج سيندر برو بفاعلية. تشمل المتطلبات مواصفات الأجهزة الأساسية (الرام، المعالج، نظام التشغيل، سرعة الإنترنت) والبرامج الضرورية التي يجب توفرها على الجهاز.",
+    "key_points": [
+        {
+            "category": "متطلبات التشغيل",
+            "details": [
+                {"item": "الرام", "minimum": "4GB", "recommended": "6GB أو أعلى"},
+                {"item": "المعالج", "minimum": "Intel Core i3", "recommended": "Intel Core i5 أو أعلى"},
+                {"item": "نظام التشغيل", "minimum": "Windows 10 أو أعلى"},
+                {"item": "سرعة الإنترنت", "minimum": "512 KB/s", "recommended": "1024 KB/s أو أعلى"}
+            ]
+        },
+        {
+            "category": "البرامج المطلوب توافرها",
+            "details": [
+                {"item": ".NET Framework 4.7.2 Runtime", "download_link": "https://dotnet.microsoft.com/en-us/download/dotnet-framework/thank-you/net472-web-installer"},
+                {"item": "7-zip", "download_link": "https://www.7-zip.org/"},
+                {"item": "Winrar", "download_link": "https://www.win-rar.com/start.html?&L=0"}
+            ]
+        }
+    ],
+    "relevant_links": [
+        "https://dotnet.microsoft.com/en-us/download/dotnet-framework/thank-you/net472-web-installer",
+        "https://www.7-zip.org/",
+        "https://www.win-rar.com/start.html?&L=0"
+    ],
+    "file_name": "senderpro_requirements.json"
+}
+```

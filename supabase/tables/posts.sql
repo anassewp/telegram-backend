@@ -1,0 +1,20 @@
+CREATE TABLE posts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    account_id UUID REFERENCES social_accounts(id) ON DELETE CASCADE,
+    title TEXT,
+    content TEXT NOT NULL,
+    post_type VARCHAR(50) DEFAULT 'text',
+    status VARCHAR(50) DEFAULT 'draft',
+    scheduled_at TIMESTAMP WITH TIME ZONE,
+    published_at TIMESTAMP WITH TIME ZONE,
+    platform_post_ids JSONB DEFAULT '{}',
+    hashtags JSONB DEFAULT '[]',
+    mentions JSONB DEFAULT '[]',
+    media_files JSONB DEFAULT '[]',
+    location JSONB,
+    tags JSONB DEFAULT '[]',
+    engagement_metrics JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
