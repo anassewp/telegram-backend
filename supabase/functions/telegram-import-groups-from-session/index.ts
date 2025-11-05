@@ -98,6 +98,48 @@ Deno.serve(async (req) => {
 
         console.log('Calling Backend URL:', url.toString().replace(session_string, '***HIDDEN***'));
 
+        // محاولة استيقاظ الخدمة أولاً (إذا كانت في sleep) - مع retry mechanism
+        const healthUrl = `${TELEGRAM_BACKEND_URL}/health`;
+        console.log('محاولة استيقاظ الخدمة:', healthUrl);
+        
+        let healthCheckSuccess = false;
+        const maxRetries = 3;
+        const retryDelay = 5000; // 5 ثواني بين كل محاولة
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                console.log(`محاولة استيقاظ الخدمة (${attempt}/${maxRetries})...`);
+                const healthResponse = await fetch(healthUrl, {
+                    method: 'GET',
+                    signal: AbortSignal.timeout(15000) // timeout 15 seconds
+                });
+                
+                if (healthResponse.ok) {
+                    healthCheckSuccess = true;
+                    console.log('✓ تم استيقاظ الخدمة بنجاح');
+                    // انتظار إضافي بعد استيقاظ الخدمة
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                    break;
+                } else {
+                    console.log(`Health check فشل (${healthResponse.status}), محاولة ${attempt + 1}/${maxRetries}...`);
+                    if (attempt < maxRetries) {
+                        await new Promise(resolve => setTimeout(resolve, retryDelay));
+                    }
+                }
+            } catch (e) {
+                console.log(`Health check فشل (محاولة ${attempt}/${maxRetries}):`, e instanceof Error ? e.message : String(e));
+                if (attempt < maxRetries) {
+                    await new Promise(resolve => setTimeout(resolve, retryDelay));
+                }
+            }
+        }
+        
+        if (!healthCheckSuccess) {
+            console.warn('⚠️ لم يتم استيقاظ الخدمة بعد عدة محاولات، سيتم المحاولة مع الطلب الرئيسي');
+            // انتظار إضافي قبل المحاولة
+            await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+
         let backendResponse;
         try {
             backendResponse = await fetch(url.toString(), {
@@ -136,16 +178,49 @@ Deno.serve(async (req) => {
             console.error('خطأ من Telegram Backend:', {
                 status: backendResponse.status,
                 statusText: backendResponse.statusText,
-                url: url.toString(),
-                error: errorText
+                url: url.toString().replace(session_string, '***HIDDEN***'),
+                error: errorText.substring(0, 1000)
             });
+            
+            // معالجة خاصة لخطأ 502 (Bad Gateway)
+            if (backendResponse.status === 502) {
+                const errorMsg = `Backend على Render.com غير متاح حالياً (502 Bad Gateway). هذا عادة ما يحدث عندما تكون الخدمة في حالة "sleeping" على الخطة المجانية. 
+                
+الحلول:
+1. انتظر 30-60 ثانية ثم حاول مرة أخرى (Render.com يحتاج وقت لاستيقاظ الخدمة)
+2. افتح الرابط التالي في المتصفح لاستيقاظ الخدمة: ${TELEGRAM_BACKEND_URL}/health
+3. بعد الاستيقاظ، حاول الاستيراد مرة أخرى
+
+الرابط: ${TELEGRAM_BACKEND_URL}`;
+                
+                throw new Error(errorMsg);
+            }
+            
+            // محاولة parse JSON error إذا كان موجوداً
+            let backendErrorMsg = errorText;
+            try {
+                const errorJson = JSON.parse(errorText);
+                if (errorJson.detail || errorJson.message || errorJson.error) {
+                    backendErrorMsg = errorJson.detail || errorJson.message || errorJson.error || errorText;
+                }
+            } catch (e) {
+                // ليس JSON، نستخدم النص كما هو
+                // إذا كان HTML (مثل صفحة 502 من Render)، نعطي رسالة واضحة
+                if (errorText.includes('<!DOCTYPE html>') || errorText.includes('<html')) {
+                    if (backendResponse.status === 502) {
+                        backendErrorMsg = 'Backend غير متاح (502 Bad Gateway) - الخدمة في حالة sleep';
+                    } else {
+                        backendErrorMsg = `Backend غير متاح (${backendResponse.status})`;
+                    }
+                }
+            }
             
             // إذا كان Backend غير متاح
             if (backendResponse.status === 0 || backendResponse.status === 500 || backendResponse.status === 503) {
-                throw new Error(`Telegram Backend غير متاح. تحقق من: ${TELEGRAM_BACKEND_URL} - تأكد من أن Backend يعمل أو قم بتحديث TELEGRAM_BACKEND_URL في Environment Variables`);
+                throw new Error(`Telegram Backend غير متاح (${backendResponse.status}). تحقق من: ${TELEGRAM_BACKEND_URL} - تأكد من أن Backend يعمل أو قم بتحديث TELEGRAM_BACKEND_URL في Environment Variables. الخطأ: ${backendErrorMsg.substring(0, 200)}`);
             }
             
-            throw new Error(`فشل في استيراد المجموعات من Backend: ${errorText}`);
+            throw new Error(`فشل في استيراد المجموعات من Backend (${backendResponse.status}): ${backendErrorMsg.substring(0, 300)}`);
         }
 
         const backendData = await backendResponse.json();
@@ -192,31 +267,23 @@ Deno.serve(async (req) => {
                 is_active: true
             };
 
-            // إضافة الحقول الجديدة للفلترة (إذا كانت موجودة في Backend response)
-            if (group.members_visible !== undefined) {
-                groupRecord.members_visible = group.members_visible;
-            }
-            
             // إضافة members_visibility_type إذا كان موجوداً في Backend أو استخراجه من members_visible
+            // ملاحظة: members_visible وmembers_visibility_type قد لا يكونان موجودين في schema
+            // سنضيفهما فقط إذا كانا موجودين في Backend response
             if (group.members_visibility_type) {
                 groupRecord.members_visibility_type = group.members_visibility_type;
             } else if (group.members_visible !== undefined) {
                 // Fallback: تحويل members_visible إلى members_visibility_type
                 groupRecord.members_visibility_type = group.members_visible ? 'fully_visible' : 'hidden';
             }
-
-            if (group.is_private !== undefined) {
-                groupRecord.is_private = group.is_private;
-            }
-            if (group.is_restricted !== undefined) {
-                groupRecord.is_restricted = group.is_restricted;
-            }
-            if (group.can_send !== undefined) {
-                groupRecord.can_send = group.can_send;
-            }
-            if (group.is_closed !== undefined) {
-                groupRecord.is_closed = group.is_closed;
-            }
+            
+            // ملاحظة: الحقول التالية غير موجودة في schema الحالي:
+            // - is_private
+            // - is_restricted  
+            // - can_send
+            // - is_closed
+            // - members_visible
+            // لذلك لا نضيفها إلى groupRecord
 
             try {
                 // محاولة الإدراج مع جميع الحقول
@@ -233,7 +300,7 @@ Deno.serve(async (req) => {
 
                 if (!insertResponse.ok) {
                     const errorText = await insertResponse.text();
-                    console.error(`خطأ في إدراج مجموعة ${group.title}:`, {
+                    console.error(`✗ فشل إدراج مجموعة ${group.title} (group_id: ${group.group_id}):`, {
                         status: insertResponse.status,
                         statusText: insertResponse.statusText,
                         error: errorText.substring(0, 500)
@@ -302,9 +369,11 @@ Deno.serve(async (req) => {
                 const inserted = await insertResponse.json();
                 insertedGroups.push(inserted[0] || inserted);
                 insertedCount++;
+                console.log(`✓ تم إدراج مجموعة: ${group.title} (group_id: ${group.group_id})`);
                 
             } catch (error) {
-                console.error(`خطأ في إدراج مجموعة ${group.title}:`, error);
+                const errorMsg = error instanceof Error ? error.message : String(error);
+                console.error(`خطأ في إدراج مجموعة ${group.title}:`, errorMsg);
                 skippedCount++;
             }
         }
@@ -327,13 +396,37 @@ Deno.serve(async (req) => {
 
     } catch (error) {
         console.error('خطأ في الاستيراد:', error);
+        
+        // Extract error message safely
+        let errorMessage = 'حدث خطأ غير معروف';
+        let errorDetails: any = null;
+        
+        if (error instanceof Error) {
+            errorMessage = error.message;
+            errorDetails = {
+                name: error.name,
+                stack: error.stack
+            };
+        } else if (typeof error === 'string') {
+            errorMessage = error;
+        } else if (error && typeof error === 'object') {
+            errorMessage = (error as any).message || JSON.stringify(error);
+            errorDetails = error;
+        }
+        
+        console.error('تفاصيل الخطأ:', {
+            message: errorMessage,
+            details: errorDetails,
+            error: error
+        });
 
         // Return error response
         const errorResponse = {
             success: false,
             error: {
                 code: 'TELEGRAM_IMPORT_FAILED',
-                message: `خطأ في الاستيراد: ${error.message}`,
+                message: `خطأ في الاستيراد: ${errorMessage}`,
+                details: errorDetails,
                 timestamp: new Date().toISOString()
             }
         };

@@ -19,8 +19,10 @@ import {
   X,
   Loader2,
   LogIn,
-  Trash2
+  Trash2,
+  ArrowRight
 } from 'lucide-react'
+import Link from 'next/link'
 
 interface TelegramGroup {
   id: string
@@ -38,6 +40,7 @@ interface TelegramGroup {
   is_restricted?: boolean  // مقيدة
   can_send?: boolean  // يمكن الإرسال
   is_closed?: boolean  // مغلقة
+  invite_link?: string | null  // رابط الدعوة للمجموعات الخاصة
 }
 
 interface TelegramSession {
@@ -57,6 +60,7 @@ export default function MembersExtractionPage() {
   const [groups, setGroups] = useState<GroupWithExtraction[]>([])
   const [sessions, setSessions] = useState<TelegramSession[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false) // حالة خاصة لتحديث الصفحة
   const [extracting, setExtracting] = useState(false)
   const [selectedGroup, setSelectedGroup] = useState<GroupWithExtraction | null>(null)
   const [selectedSession, setSelectedSession] = useState('')
@@ -88,13 +92,34 @@ export default function MembersExtractionPage() {
     fetchData()
   }, [])
 
+  // إعادة جلب userGroups عند تغيير الجلسة
+  useEffect(() => {
+    const updateUserGroups = async () => {
+      if (selectedSession) {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) {
+          await checkUserGroups(user.id, selectedSession)
+        }
+      } else {
+        setUserGroups(new Set())
+      }
+    }
+    updateUserGroups()
+  }, [selectedSession])
+
   // تحديث الفلترة عند تغيير الفلاتر أو البيانات
   useEffect(() => {
     // الفلترة تحدث تلقائياً في applyFilters()
   }, [groups, filters, searchQuery])
 
-  const fetchData = async () => {
+  const fetchData = async (showRefreshing = false) => {
     try {
+      if (showRefreshing) {
+        setRefreshing(true)
+      } else {
+        setLoading(true)
+      }
+      
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
@@ -152,9 +177,15 @@ export default function MembersExtractionPage() {
       if (sessionsError) throw sessionsError
       setSessions(sessionsData || [])
 
-      // تحديد أول جلسة نشطة
-      if (sessionsData && sessionsData.length > 0) {
+      // تحديد أول جلسة نشطة (فقط إذا لم تكن هناك جلسة محددة)
+      if (sessionsData && sessionsData.length > 0 && !selectedSession) {
         setSelectedSession(sessionsData[0].id)
+      }
+
+      // إعادة جلب userGroups من الجلسة المحددة
+      if (selectedSession || (sessionsData && sessionsData.length > 0)) {
+        const sessionToUse = selectedSession || sessionsData[0].id
+        await checkUserGroups(user.id, sessionToUse)
       }
 
     } catch (err: any) {
@@ -162,6 +193,7 @@ export default function MembersExtractionPage() {
       setError(err.message || 'حدث خطأ في جلب البيانات')
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }
 
@@ -190,6 +222,15 @@ export default function MembersExtractionPage() {
           return prev + 10
         })
       }, 500)
+
+      // التحقق من أن المستخدم عضو في المجموعة
+      if (!userGroups.has(selectedGroup.group_id) && !selectedGroup.username && !selectedGroup.invite_link) {
+        throw new Error('لا يمكن استخراج الأعضاء: يجب أن تكون عضو في المجموعة أولاً.\n\n' +
+          'للمجموعات الخاصة:\n' +
+          '1. انضم للمجموعة عبر رابط الدعوة إذا كان متوفراً\n' +
+          '2. أو استخدم زر "انضمام" إذا كانت المجموعة عامة\n' +
+          '3. ثم حاول استخراج الأعضاء مرة أخرى')
+      }
 
       // استخراج الأعضاء عبر Edge Function
       const { data, error: extractError } = await supabase.functions.invoke('telegram-extract-members', {
@@ -234,7 +275,22 @@ export default function MembersExtractionPage() {
 
     } catch (err: any) {
       console.error('Error extracting members:', err)
-      setError(err.message || 'حدث خطأ أثناء استخراج الأعضاء')
+      let errorMessage = err.message || 'حدث خطأ أثناء استخراج الأعضاء'
+      
+      // تحسين رسالة الخطأ إذا كانت تتعلق بالعضوية
+      if (errorMessage.includes('must be a member') || errorMessage.includes('not found') || errorMessage.includes('غير متاحة')) {
+        errorMessage = 'لا يمكن استخراج الأعضاء من هذه المجموعة.\n\n' +
+          'الأسباب المحتملة:\n' +
+          '1. أنت لست عضو في المجموعة - يجب الانضمام أولاً\n' +
+          '2. المجموعة خاصة - يجب الانضمام عبر رابط الدعوة أولاً\n' +
+          '3. المجموعة محذوفة أو غير موجودة\n\n' +
+          'الحل:\n' +
+          '• إذا كانت المجموعة عامة: استخدم زر "انضمام" أولاً\n' +
+          '• إذا كانت المجموعة خاصة: استخدم رابط الدعوة للانضمام\n' +
+          '• بعد الانضمام، حاول استخراج الأعضاء مرة أخرى'
+      }
+      
+      setError(errorMessage)
       setExtractionProgress(0)
     } finally {
       setExtracting(false)
@@ -242,16 +298,63 @@ export default function MembersExtractionPage() {
   }
 
   const checkUserGroups = async (userId: string, sessionId?: string) => {
-    // هذه الوظيفة ستحاول جلب dialogs من جلسة واحدة للتحقق من المجموعات
-    // يمكن تحسينها لاحقاً لجلب جميع dialogs من جميع الجلسات
-    if (!sessionId) return
+    // هذه الوظيفة تحاول جلب dialogs من جلسة واحدة للتحقق من المجموعات التي المستخدم عضو فيها
+    if (!sessionId) {
+      setUserGroups(new Set())
+      return
+    }
 
     try {
-      // يمكن إضافة Edge Function لجلب dialogs، لكن حالياً سنعتمد على محاولة الاستخراج
-      // أو يمكننا إضافة flag في قاعدة البيانات
-      // الآن سنتركها فارغة وستتم تحديثها عند محاولة الاستخراج
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      // جلب بيانات الجلسة
+      const { data: sessionData, error: sessionError } = await supabase
+        .from('telegram_sessions')
+        .select('*')
+        .eq('id', sessionId)
+        .eq('user_id', user.id)
+        .eq('status', 'active')
+        .single()
+
+      if (sessionError || !sessionData) {
+        console.warn('Session not found or inactive:', sessionError)
+        setUserGroups(new Set())
+        return
+      }
+
+      // محاولة جلب dialogs عبر Edge Function (إذا كان متوفراً)
+      // أو يمكننا الاعتماد على أن المجموعات التي تم الانضمام إليها ستكون في قاعدة البيانات
+      // لكن الأفضل هو جلب dialogs مباشرة من Telegram
+      
+      // حالياً، سنعتمد على أن المجموعات التي المستخدم عضو فيها هي التي:
+      // 1. تم الانضمام إليها عبر زر "انضمام"
+      // 2. أو تم استخراج أعضاء منها بنجاح (مما يعني أن المستخدم عضو فيها)
+      
+      // لذلك، سنبحث في المجموعات التي تم استخراج أعضاء منها
+      // أو يمكننا استخدام approach آخر: المجموعات التي session_id يطابق الجلسة المحددة
+      // لكن هذا ليس دقيقاً لأن المستخدم قد يكون عضو في مجموعة من جلسة أخرى
+      
+      // الحل الأفضل: إنشاء Edge Function لجلب dialogs، لكن حالياً سنستخدم حل بديل:
+      // نحن نعتمد على أن المستخدم سينضم للمجموعات أولاً، ثم يحاول استخراج الأعضاء
+      // لذلك، سنعتبر أن جميع المجموعات التي تم استخراج أعضاء منها = المستخدم عضو فيها
+      
+      const { data: groupsWithMembers } = await supabase
+        .from('telegram_members')
+        .select('group_id')
+        .eq('user_id', user.id)
+        .limit(1000)
+
+      if (groupsWithMembers) {
+        const groupIds = new Set(groupsWithMembers.map(m => m.group_id))
+        setUserGroups(groupIds)
+        console.log(`Found ${groupIds.size} groups that user is a member of`)
+      } else {
+        setUserGroups(new Set())
+      }
     } catch (err) {
       console.error('Error checking user groups:', err)
+      setUserGroups(new Set())
     }
   }
 
@@ -278,7 +381,8 @@ export default function MembersExtractionPage() {
           user_id: user.id,
           session_id: selectedSession,
           group_id: group.group_id,
-          username: group.username || null
+          username: group.username || null,
+          invite_link: group.invite_link || null  // إرسال رابط الدعوة للمجموعات الخاصة
         }
       })
 
@@ -292,9 +396,16 @@ export default function MembersExtractionPage() {
         setSuccess(`تم الانضمام بنجاح إلى: ${data.data.group_title}`)
         // إضافة المجموعة إلى قائمة المجموعات التي المستخدم عضو فيها
         setUserGroups(prev => new Set([...prev, group.group_id]))
+        // إعادة جلب userGroups من الجلسة المحددة
+        if (selectedSession) {
+          const { data: { user } } = await supabase.auth.getUser()
+          if (user) {
+            await checkUserGroups(user.id, selectedSession)
+          }
+        }
         // إعادة تحميل البيانات بعد ثانية
         setTimeout(() => {
-          fetchData()
+          fetchData(true) // استخدام fetchData مع showRefreshing=true
         }, 1000)
       } else {
         throw new Error('فشل في الانضمام للمجموعة')
@@ -444,7 +555,10 @@ export default function MembersExtractionPage() {
         return false
       })
     } else if (filters.membersVisibility === 'admin_only') {
-      filtered = filtered.filter(group => group.members_visibility_type === 'admin_only')
+      filtered = filtered.filter(group => {
+        // فقط المجموعات التي members_visibility_type === 'admin_only' بالضبط
+        return group.members_visibility_type === 'admin_only';
+      })
     } else if (filters.membersVisibility === 'hidden') {
       filtered = filtered.filter(group => {
         if (group.members_visibility_type === 'hidden') return true
@@ -469,26 +583,60 @@ export default function MembersExtractionPage() {
 
     // Filter by can send
     if (filters.canSend === 'yes') {
-      filtered = filtered.filter(group => 
-        group.can_send === true || 
-        (group.can_send === undefined && group.is_closed !== true && group.is_closed !== undefined)
-      )
+      filtered = filtered.filter(group => {
+        // إذا كان can_send موجود، استخدمه
+        if (group.can_send !== undefined && group.can_send !== null) {
+          return group.can_send === true;
+        }
+        // إذا كان is_closed موجود، نستخدمه (إذا كان false، يعني يمكن الإرسال)
+        if (group.is_closed !== undefined && group.is_closed !== null) {
+          return group.is_closed === false;
+        }
+        // إذا كان is_restricted موجود، نستخدمه (إذا كان false، يعني يمكن الإرسال)
+        if (group.is_restricted !== undefined && group.is_restricted !== null) {
+          return group.is_restricted === false;
+        }
+        // إذا لم يكن موجود، نعتبره يمكن الإرسال (افتراضي)
+        return true;
+      });
     } else if (filters.canSend === 'no') {
-      filtered = filtered.filter(group => 
-        group.can_send === false || 
-        (group.can_send === undefined && group.is_closed === true) ||
-        (group.is_closed === true)
-      )
+      filtered = filtered.filter(group => {
+        // إذا كان can_send موجود، استخدمه
+        if (group.can_send !== undefined && group.can_send !== null) {
+          return group.can_send === false;
+        }
+        // إذا كان is_closed موجود، نستخدمه (إذا كان true، يعني لا يمكن الإرسال)
+        if (group.is_closed !== undefined && group.is_closed !== null) {
+          return group.is_closed === true;
+        }
+        // إذا كان is_restricted موجود، نستخدمه (إذا كان true، يعني لا يمكن الإرسال)
+        if (group.is_restricted !== undefined && group.is_restricted !== null) {
+          return group.is_restricted === true;
+        }
+        // إذا لم يكن موجود، نعتبره يمكن الإرسال (افتراضي) - لذلك لا نعرضه في "لا يمكن الإرسال"
+        return false;
+      });
     }
 
     // Filter by restricted
     if (filters.restricted === 'yes') {
-      filtered = filtered.filter(group => group.is_restricted === true)
+      filtered = filtered.filter(group => {
+        // إذا كان is_restricted موجود، استخدمه
+        if (group.is_restricted !== undefined && group.is_restricted !== null) {
+          return group.is_restricted === true;
+        }
+        // إذا لم يكن موجود، لا نعتبره مقيدة
+        return false;
+      });
     } else if (filters.restricted === 'no') {
-      filtered = filtered.filter(group => 
-        group.is_restricted === false || 
-        group.is_restricted === undefined
-      )
+      filtered = filtered.filter(group => {
+        // إذا كان is_restricted موجود، استخدمه
+        if (group.is_restricted !== undefined && group.is_restricted !== null) {
+          return group.is_restricted === false;
+        }
+        // إذا لم يكن موجود، نعتبره غير مقيدة (افتراضي)
+        return true;
+      });
     }
 
     // Filter by session
@@ -546,6 +694,14 @@ export default function MembersExtractionPage() {
     <div className="space-y-8" style={{
       animation: 'fadeIn 0.3s ease-out'
     }}>
+      {/* Back Button */}
+      <Link 
+        href="/dashboard/telegram"
+        className="inline-flex items-center gap-2 text-neutral-600 hover:text-neutral-900 transition-colors mb-2"
+      >
+        <ArrowRight className="w-5 h-5" />
+        <span className="font-medium">العودة لقسم التيليجرام</span>
+      </Link>
 
       {/* Header */}
       <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-green-600 via-emerald-600 to-teal-600 p-8">
@@ -644,11 +800,12 @@ export default function MembersExtractionPage() {
             </select>
           )}
           <button 
-            onClick={fetchData}
-            className="flex items-center gap-2 px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium transition-colors"
+            onClick={() => fetchData(true)}
+            disabled={refreshing || loading}
+            className="flex items-center gap-2 px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <RefreshCw className="w-5 h-5" />
-            <span>تحديث</span>
+            <RefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
+            <span>{refreshing ? 'جاري التحديث...' : 'تحديث'}</span>
           </button>
         </div>
         {sessions.length === 0 && (
@@ -798,26 +955,58 @@ export default function MembersExtractionPage() {
                         <span>تصدير CSV</span>
                       </button>
                     )}
-                    {/* زر الانضمام - يظهر فقط إذا لم يكن المستخدم عضواً في المجموعة */}
-                    {!userGroups.has(group.group_id) && group.username && (
-                      <button
-                        onClick={() => handleJoinGroup(group)}
-                        disabled={joiningGroup === group.id || !selectedSession}
-                        className="px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white hover:shadow-lg rounded-lg font-medium transition-all text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                        title={!selectedSession ? 'اختر جلسة أولاً' : 'انضم للمجموعة'}
-                      >
-                        {joiningGroup === group.id ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            <span>جاري الانضمام...</span>
-                          </>
-                        ) : (
-                          <>
-                            <LogIn className="w-4 h-4" />
-                            <span>انضمام</span>
-                          </>
-                        )}
-                      </button>
+                    {/* زر الانضمام - يظهر فقط في حالات معينة */}
+                    {(() => {
+                      // التحقق من أن المستخدم ليس عضو في المجموعة
+                      const isNotMember = !userGroups.has(group.group_id)
+                      
+                      // التحقق من أن المجموعة خاصة (is_private === true أو invite_link موجود أو لا يوجد username)
+                      const isPrivateGroup = group.is_private === true || 
+                                             group.invite_link !== null || 
+                                             (group.username === null && group.is_private !== false)
+                      
+                      // التحقق من أن الجلسة غير منضمة لجروب سابق (userGroups فارغة)
+                      const isSessionNotJoined = userGroups.size === 0
+                      
+                      // المنطق:
+                      // 1. إذا كانت الجلسة غير منضمة (userGroups.size === 0) → يظهر فقط للمجموعات الخاصة
+                      // 2. إذا كانت الجلسة منضمة (userGroups.size > 0) → لا يظهر زر الانضمام أبداً
+                      const shouldShowJoinButton = isNotMember && 
+                                                   isPrivateGroup && 
+                                                   isSessionNotJoined
+                      
+                      if (!shouldShowJoinButton) return null
+                      
+                      return (
+                        <button
+                          onClick={() => handleJoinGroup(group)}
+                          disabled={joiningGroup === group.id || !selectedSession}
+                          className="px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white hover:shadow-lg rounded-lg font-medium transition-all text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                          title={!selectedSession ? 'اختر جلسة أولاً' : (group.invite_link ? 'انضم للمجموعة عبر رابط الدعوة' : 'انضم للمجموعة')}
+                        >
+                          {joiningGroup === group.id ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              <span>جاري الانضمام...</span>
+                            </>
+                          ) : (
+                            <>
+                              <LogIn className="w-4 h-4" />
+                              <span>انضمام</span>
+                            </>
+                          )}
+                        </button>
+                      )
+                    })()}
+                    {/* تحذير للمجموعات الخاصة بدون رابط دعوة (فقط إذا كانت الجلسة غير منضمة) */}
+                    {!userGroups.has(group.group_id) && 
+                     !group.username && 
+                     !group.invite_link && 
+                     userGroups.size === 0 && (
+                      <div className="px-3 py-2 bg-orange-50 border border-orange-200 rounded-lg text-xs text-orange-700">
+                        <AlertCircle className="w-4 h-4 inline mr-1" />
+                        يجب الانضمام أولاً
+                      </div>
                     )}
                     <button
                       onClick={() => {
@@ -827,9 +1016,13 @@ export default function MembersExtractionPage() {
                         setError('')
                         setSuccess('')
                       }}
-                      disabled={extracting || (!userGroups.has(group.group_id) && !group.username)}
+                      disabled={extracting || (!userGroups.has(group.group_id) && !group.username && !group.invite_link)}
                       className="px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:shadow-lg rounded-lg font-medium transition-all text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                      title={!userGroups.has(group.group_id) && !group.username ? 'يجب الانضمام للمجموعة أولاً' : ''}
+                      title={
+                        !userGroups.has(group.group_id) && !group.username && !group.invite_link 
+                          ? 'يجب الانضمام للمجموعة أولاً. للمجموعات الخاصة، استخدم رابط الدعوة للانضمام.' 
+                          : ''
+                      }
                     >
                       <UserPlus className="w-4 h-4" />
                       <span>{group.extracted_members > 0 ? 'إعادة الاستخراج' : 'استخراج الأعضاء'}</span>

@@ -136,10 +136,10 @@ export default function TelegramGroupFilter({
         <div className="p-4 pt-0 space-y-4 border-t border-gray-200 dark:border-gray-700">
           {/* Row 1: Type, Members Visibility, Privacy */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Type Filter */}
+            {/* Type Filter - تصنيف النوع (جروب/قناة) */}
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                نوع المجموعة
+                تصنيف النوع (جروب/قناة)
               </label>
               <select
                 value={filters.type}
@@ -147,9 +147,9 @@ export default function TelegramGroupFilter({
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
                 <option value="all">جميع الأنواع</option>
-                <option value="groups_only">مجموعات فقط</option>
-                <option value="group">مجموعة عادية</option>
-                <option value="supergroup">مجموعة كبيرة</option>
+                <option value="groups_only">مجموعات فقط (جروب + سوبر جروب)</option>
+                <option value="group">جروب عادي</option>
+                <option value="supergroup">سوبر جروب</option>
                 <option value="channel">قناة</option>
               </select>
             </div>

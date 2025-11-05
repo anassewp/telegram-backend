@@ -16,8 +16,10 @@ import {
   Shield,
   X,
   Loader2,
-  RefreshCw
+  RefreshCw,
+  ArrowRight
 } from 'lucide-react'
+import Link from 'next/link'
 
 interface TelegramGroup {
   id: string
@@ -278,6 +280,14 @@ export default function MembersTransferPage() {
 
   return (
     <>
+      {/* Back Button */}
+      <Link 
+        href="/dashboard/telegram"
+        className="inline-flex items-center gap-2 text-neutral-600 hover:text-neutral-900 transition-colors mb-4"
+      >
+        <ArrowRight className="w-5 h-5" />
+        <span className="font-medium">العودة لقسم التيليجرام</span>
+      </Link>
       <div className="space-y-8" style={{ animation: 'fadeIn 0.3s ease-out' }}>
 
       {/* Header */}

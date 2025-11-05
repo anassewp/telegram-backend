@@ -15,8 +15,10 @@ import {
   Smartphone,
   Send,
   Shield,
-  Zap
+  Zap,
+  ArrowRight
 } from 'lucide-react';
+import Link from 'next/link';
 
 interface TelegramSession {
   id: string;
@@ -195,6 +197,15 @@ export default function TelegramSessionsPage() {
 
   return (
     <div className="space-y-6" style={{animation: 'fade-in 0.3s ease-out'}}>
+      {/* Back Button */}
+      <Link 
+        href="/dashboard/telegram"
+        className="inline-flex items-center gap-2 text-neutral-600 hover:text-neutral-900 transition-colors mb-2"
+      >
+        <ArrowRight className="w-5 h-5" />
+        <span className="font-medium">العودة لقسم التيليجرام</span>
+      </Link>
+
       {/* Header with Gradient Background */}
       <div className="relative overflow-hidden bg-gradient-to-br from-purple-600 via-blue-600 to-cyan-500 rounded-2xl p-8 shadow-2xl">
         <div className="absolute inset-0 bg-black/10"></div>

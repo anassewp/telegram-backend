@@ -23,8 +23,10 @@ import {
   Zap,
   ChevronDown,
   Tag,
-  Info
+  Info,
+  ArrowRight
 } from 'lucide-react';
+import Link from 'next/link';
 
 interface TelegramGroup {
   id: string;
@@ -239,6 +241,8 @@ export default function TelegramGroupsPage() {
     } else if (searchFilterVisibleMembers === 'admin_only') {
       const beforeFilter = filtered.length;
       filtered = filtered.filter(group => {
+        // فقط المجموعات التي members_visibility_type === 'admin_only' بالضبط
+        // لا نعرض مجموعات hidden أو fully_visible أو undefined/null
         return group.members_visibility_type === 'admin_only';
       });
       console.log(`🔍 Filter visible members (admin_only): ${beforeFilter} -> ${filtered.length}`);
@@ -417,7 +421,12 @@ export default function TelegramGroupsPage() {
       });
     } else if (filterVisibleMembers === 'admin_only') {
       filtered = filtered.filter(group => {
-        return group.members_visibility_type === 'admin_only';
+        // فقط المجموعات التي members_visibility_type === 'admin_only' بالضبط
+        const isAdminOnly = group.members_visibility_type === 'admin_only';
+        if (!isAdminOnly && group.members_visibility_type) {
+          console.warn(`Group "${group.title}" has wrong visibility type: ${group.members_visibility_type} (expected: admin_only)`);
+        }
+        return isAdminOnly;
       });
     } else if (filterVisibleMembers === 'hidden') {
       filtered = filtered.filter(group => {
@@ -505,15 +514,35 @@ export default function TelegramGroupsPage() {
 
       if (error) {
         console.error('خطأ في الاستيراد:', error);
-        // عرض رسالة خطأ أكثر تفصيلاً
-        const errorMessage = error.message || 'فشل الاستيراد';
+        // محاولة استخراج رسالة الخطأ من response
+        let errorMessage = error.message || 'حدث خطأ غير معروف';
+        if (error.context && error.context.body) {
+          try {
+            const errorBody = typeof error.context.body === 'string' 
+              ? JSON.parse(error.context.body) 
+              : error.context.body;
+            if (errorBody.error && errorBody.error.message) {
+              errorMessage = errorBody.error.message;
+            }
+          } catch (e) {
+            // تجاهل خطأ parsing
+          }
+        }
         throw new Error(`فشل الاستيراد: ${errorMessage}`);
       }
 
       // التحقق من وجود error في response
       if (data?.error) {
         console.error('خطأ من Edge Function:', data.error);
-        throw new Error(data.error.message || 'حدث خطأ أثناء الاستيراد');
+        const errorMsg = data.error.message || data.error.details || 'حدث خطأ أثناء الاستيراد';
+        throw new Error(errorMsg);
+      }
+      
+      // التحقق من success = false
+      if (data?.success === false) {
+        console.error('فشل الاستيراد:', data);
+        const errorMsg = data.error?.message || data.message || 'فشل في الاستيراد';
+        throw new Error(errorMsg);
       }
 
       if (data?.success) {
@@ -847,6 +876,15 @@ export default function TelegramGroupsPage() {
 
   return (
     <div className="space-y-6">
+      {/* Back Button */}
+      <Link 
+        href="/dashboard/telegram"
+        className="inline-flex items-center gap-2 text-neutral-600 hover:text-neutral-900 transition-colors mb-2"
+      >
+        <ArrowRight className="w-5 h-5" />
+        <span className="font-medium">العودة لقسم التيليجرام</span>
+      </Link>
+
       {/* Header with Session Selector */}
       <div className="bg-white p-6 rounded-2xl border border-neutral-200">
         <div className="flex items-start justify-between mb-6">

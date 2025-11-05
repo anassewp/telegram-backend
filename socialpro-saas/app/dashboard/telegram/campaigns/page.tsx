@@ -19,8 +19,10 @@ import {
   X,
   Send,
   RefreshCw,
-  Loader2
+  Loader2,
+  ArrowRight
 } from 'lucide-react'
+import Link from 'next/link'
 
 interface Campaign {
   id: string
@@ -368,6 +370,14 @@ export default function CampaignsPage() {
     <div className="space-y-8" style={{
       animation: 'fadeIn 0.3s ease-out'
     }}>
+      {/* Back Button */}
+      <Link 
+        href="/dashboard/telegram"
+        className="inline-flex items-center gap-2 text-neutral-600 hover:text-neutral-900 transition-colors mb-2"
+      >
+        <ArrowRight className="w-5 h-5" />
+        <span className="font-medium">العودة لقسم التيليجرام</span>
+      </Link>
 
       {/* Header */}
       <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-orange-600 via-red-600 to-pink-600 p-8">

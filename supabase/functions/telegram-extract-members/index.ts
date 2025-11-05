@@ -186,9 +186,22 @@ Deno.serve(async (req) => {
             if (extractResponse.status === 0 || extractResponse.status === 500 || extractResponse.status === 503) {
                 throw new Error(`Telegram Backend غير متاح (Status: ${extractResponse.status}). تحقق من: ${TELEGRAM_BACKEND_URL}`);
             } else if (extractResponse.status === 404) {
-                throw new Error(`المجموعة غير موجودة أو غير متاحة (group_id: ${telegram_group_id})`);
+                // تحسين رسالة الخطأ لتكون أكثر وضوحاً
+                let errorMsg = `المجموعة غير موجودة أو غير متاحة (group_id: ${telegram_group_id}).\n\n`;
+                errorMsg += 'الأسباب المحتملة:\n';
+                errorMsg += '1. أنت لست عضو في هذه المجموعة - يجب الانضمام للمجموعة أولاً من صفحة "المجموعات"\n';
+                errorMsg += '2. المجموعة خاصة - يجب الانضمام عبر رابط الدعوة أولاً\n';
+                errorMsg += '3. المجموعة محذوفة أو غير موجودة\n\n';
+                errorMsg += 'الحل: انضم للمجموعة أولاً من صفحة "المجموعات" ثم حاول استخراج الأعضاء مرة أخرى.';
+                throw new Error(errorMsg);
             } else if (extractResponse.status === 403) {
-                throw new Error('لا توجد صلاحيات لعرض أعضاء هذه المجموعة');
+                let errorMsg = 'لا توجد صلاحيات لعرض أعضاء هذه المجموعة.\n\n';
+                errorMsg += 'الأسباب المحتملة:\n';
+                errorMsg += '1. أنت لست عضو في المجموعة - يجب الانضمام أولاً\n';
+                errorMsg += '2. أنت لست admin في المجموعة - بعض المجموعات تسمح فقط للإدمن بعرض قائمة الأعضاء\n';
+                errorMsg += '3. المجموعة خاصة وتحتاج إلى صلاحيات خاصة\n\n';
+                errorMsg += 'الحل: تأكد من أنك عضو في المجموعة وأن لديك صلاحيات لعرض الأعضاء.';
+                throw new Error(errorMsg);
             } else if (extractResponse.status === 401) {
                 throw new Error('الجلسة منتهية الصلاحية. يرجى إعادة تسجيل الدخول');
             } else {
