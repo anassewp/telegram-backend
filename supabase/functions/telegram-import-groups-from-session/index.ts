@@ -198,6 +198,7 @@ Deno.serve(async (req) => {
                 is_active: true,
                 // الحقول الجديدة للفلترة
                 members_visible: group.members_visible !== undefined ? group.members_visible : true,
+                members_visibility_type: group.members_visibility_type || (group.members_visible === true ? 'fully_visible' : 'hidden'),
                 is_private: group.is_private !== undefined ? group.is_private : false,
                 is_restricted: group.is_restricted !== undefined ? group.is_restricted : false,
                 can_send: group.can_send !== undefined ? group.can_send : true,
