@@ -60,7 +60,8 @@ interface SearchResult {
   username: string | null;
   members_count: number;
   type: 'group' | 'supergroup' | 'channel';
-  members_visible?: boolean;  // هل الأعضاء ظاهرين للجميع
+  members_visible?: boolean;  // للتوافق مع الكود القديم
+  members_visibility_type?: 'fully_visible' | 'admin_only' | 'hidden';  // نوع ظهور الأعضاء
   is_private?: boolean;  // خاصة أو عامة
   is_restricted?: boolean;  // مقيدة
   can_send?: boolean;  // يمكن الإرسال
@@ -178,7 +179,7 @@ export default function TelegramGroupsPage() {
   const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
   
   // Filters for search results
-  const [searchFilterVisibleMembers, setSearchFilterVisibleMembers] = useState<'all' | 'visible' | 'hidden'>('all');
+  const [searchFilterVisibleMembers, setSearchFilterVisibleMembers] = useState<'all' | 'fully_visible' | 'admin_only' | 'hidden'>('all');
   const [searchFilterPrivacy, setSearchFilterPrivacy] = useState<'all' | 'public' | 'private'>('all');
   const [searchFilterCanSend, setSearchFilterCanSend] = useState<'all' | 'yes' | 'no'>('all');
   const [searchFilterRestricted, setSearchFilterRestricted] = useState<'all' | 'yes' | 'no'>('all');
@@ -218,29 +219,39 @@ export default function TelegramGroupsPage() {
 
     let filtered = [...searchResults];
 
-    // Filter by visible members
-    if (searchFilterVisibleMembers === 'visible') {
+    // Filter by visible members (using members_visibility_type)
+    if (searchFilterVisibleMembers === 'fully_visible') {
       const beforeFilter = filtered.length;
       filtered = filtered.filter(group => {
-        // إذا كان الحقل موجود، استخدمه
-        if (group.members_visible !== undefined && group.members_visible !== null) {
-          return group.members_visible === true;
+        // استخدام members_visibility_type أولاً
+        if (group.members_visibility_type === 'fully_visible') {
+          return true;
         }
-        // إذا لم يكن موجود، نعتبره غير ظاهر (لأننا لا نعرف حالته)
+        // للتوافق مع الكود القديم
+        if (group.members_visibility_type === undefined && group.members_visible === true) {
+          return true;
+        }
         return false;
       });
-      console.log(`🔍 Filter visible members (visible): ${beforeFilter} -> ${filtered.length}`);
+      console.log(`🔍 Filter visible members (fully_visible): ${beforeFilter} -> ${filtered.length}`);
+    } else if (searchFilterVisibleMembers === 'admin_only') {
+      const beforeFilter = filtered.length;
+      filtered = filtered.filter(group => {
+        return group.members_visibility_type === 'admin_only';
+      });
+      console.log(`🔍 Filter visible members (admin_only): ${beforeFilter} -> ${filtered.length}`);
     } else if (searchFilterVisibleMembers === 'hidden') {
       const beforeFilter = filtered.length;
       filtered = filtered.filter(group => {
-        // فقط إذا كان الحقل موجود و false
-        const result = group.members_visible === false;
-        if (!result && group.members_visible === undefined) {
-          // إذا لم يكن موجود، قد يكون مخفيين (لأننا لم نستطع التحقق)
-          // لكن نعتبره غير مخفيين للتحفظ
-          return false;
+        // استخدام members_visibility_type أولاً
+        if (group.members_visibility_type === 'hidden') {
+          return true;
         }
-        return result;
+        // للتوافق مع الكود القديم
+        if (group.members_visibility_type === undefined && group.members_visible === false) {
+          return true;
+        }
+        return false;
       });
       console.log(`🔍 Filter visible members (hidden): ${beforeFilter} -> ${filtered.length}`);
     }
@@ -1454,7 +1465,8 @@ export default function TelegramGroupsPage() {
                       className="w-full px-3 py-2 text-sm border border-neutral-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                     >
                       <option value="all">الكل</option>
-                      <option value="visible">أعضاء ظاهرين</option>
+                      <option value="fully_visible">أعضاء ظاهرين بالكامل</option>
+                      <option value="admin_only">الإدمن فقط ظاهرين</option>
                       <option value="hidden">أعضاء مخفيين</option>
                     </select>
                   </div>
