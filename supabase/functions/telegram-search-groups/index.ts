@@ -45,8 +45,18 @@ Deno.serve(async (req) => {
 
         // التحقق من أن TELEGRAM_BACKEND_URL موجود
         if (!TELEGRAM_BACKEND_URL || TELEGRAM_BACKEND_URL === 'http://localhost:8000') {
-            console.warn('⚠️ TELEGRAM_BACKEND_URL غير مضبوط أو يشير إلى localhost');
-            console.warn('⚠️ تأكد من إضافة TELEGRAM_BACKEND_URL في Environment Variables');
+            const errorMsg = 'TELEGRAM_BACKEND_URL غير مضبوط. يرجى إضافة TELEGRAM_BACKEND_URL في Supabase Environment Variables (Settings > Edge Functions > Environment Variables)';
+            console.error('⚠️', errorMsg);
+            return new Response(JSON.stringify({
+                error: {
+                    code: 'TELEGRAM_BACKEND_URL_MISSING',
+                    message: errorMsg,
+                    timestamp: new Date().toISOString()
+                }
+            }), {
+                status: 400,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            });
         }
 
         // استدعاء Python Backend للبحث الحقيقي

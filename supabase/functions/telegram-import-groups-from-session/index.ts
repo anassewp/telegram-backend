@@ -46,6 +46,23 @@ Deno.serve(async (req) => {
         console.log(`استيراد مجموعات من الجلسة: ${session_id} للمستخدم: ${user_id}`);
         console.log('TELEGRAM_BACKEND_URL:', TELEGRAM_BACKEND_URL);
 
+        // التحقق من أن TELEGRAM_BACKEND_URL موجود
+        if (!TELEGRAM_BACKEND_URL || TELEGRAM_BACKEND_URL === 'http://localhost:8000') {
+            const errorMsg = 'TELEGRAM_BACKEND_URL غير مضبوط. يرجى إضافة TELEGRAM_BACKEND_URL في Supabase Environment Variables (Settings > Edge Functions > Environment Variables)';
+            console.error('⚠️', errorMsg);
+            return new Response(JSON.stringify({
+                success: false,
+                error: {
+                    code: 'TELEGRAM_BACKEND_URL_MISSING',
+                    message: errorMsg,
+                    timestamp: new Date().toISOString()
+                }
+            }), {
+                status: 400,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            });
+        }
+
         // التحقق من الجلسة في قاعدة البيانات
         const sessionResponse = await fetch(
             `${SUPABASE_URL}/rest/v1/telegram_sessions?id=eq.${session_id}&user_id=eq.${user_id}`,
@@ -78,12 +95,37 @@ Deno.serve(async (req) => {
         url.searchParams.append('api_hash', api_hash);
         url.searchParams.append('session_string', session_string);
 
-        const backendResponse = await fetch(url.toString(), {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
+        let backendResponse;
+        try {
+            backendResponse = await fetch(url.toString(), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                signal: AbortSignal.timeout(60000) // timeout 60 seconds
+            });
+        } catch (fetchError) {
+            console.error('خطأ في الاتصال بـ Backend:', fetchError);
+            
+            let errorMsg = 'فشل في الاتصال بـ Telegram Backend';
+            if (fetchError.name === 'TimeoutError' || fetchError.message?.includes('timeout')) {
+                errorMsg = `انتهت مهلة الاتصال بـ Telegram Backend (60 ثانية). تحقق من: ${TELEGRAM_BACKEND_URL}`;
+            } else if (fetchError.message?.includes('Failed to fetch') || fetchError.message?.includes('ECONNREFUSED')) {
+                errorMsg = `لا يمكن الاتصال بـ Telegram Backend على ${TELEGRAM_BACKEND_URL}. تأكد من أن Backend يعمل وأن TELEGRAM_BACKEND_URL صحيح في Environment Variables.`;
             }
-        });
+            
+            return new Response(JSON.stringify({
+                success: false,
+                error: {
+                    code: 'TELEGRAM_BACKEND_CONNECTION_FAILED',
+                    message: errorMsg,
+                    timestamp: new Date().toISOString()
+                }
+            }), {
+                status: 503,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            });
+        }
 
         if (!backendResponse.ok) {
             const errorText = await backendResponse.text();
