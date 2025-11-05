@@ -911,8 +911,9 @@ export default function TelegramGroupsPage() {
               className="w-full px-4 py-2 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent"
             >
               <option value="all">الكل</option>
-              <option value="visible">أعضاء ظاهرين</option>
-              <option value="hidden">أعضاء مخفيين (إدمن فقط)</option>
+              <option value="fully_visible">أعضاء ظاهرين بالكامل</option>
+              <option value="admin_only">الإدمن فقط ظاهرين</option>
+              <option value="hidden">أعضاء مخفيين</option>
             </select>
           </div>
         </div>
