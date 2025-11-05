@@ -220,19 +220,29 @@ export default function TelegramGroupsPage() {
 
     // Filter by visible members
     if (searchFilterVisibleMembers === 'visible') {
+      const beforeFilter = filtered.length;
       filtered = filtered.filter(group => {
         // إذا كان الحقل موجود، استخدمه
         if (group.members_visible !== undefined && group.members_visible !== null) {
           return group.members_visible === true;
         }
-        // إذا لم يكن موجود، لا نضعه في النتائج (لأننا لا نعرف حالته)
+        // إذا لم يكن موجود، نعتبره غير ظاهر (لأننا لا نعرف حالته)
         return false;
       });
+      console.log(`🔍 Filter visible members (visible): ${beforeFilter} -> ${filtered.length}`);
     } else if (searchFilterVisibleMembers === 'hidden') {
+      const beforeFilter = filtered.length;
       filtered = filtered.filter(group => {
         // فقط إذا كان الحقل موجود و false
-        return group.members_visible === false;
+        const result = group.members_visible === false;
+        if (!result && group.members_visible === undefined) {
+          // إذا لم يكن موجود، قد يكون مخفيين (لأننا لم نستطع التحقق)
+          // لكن نعتبره غير مخفيين للتحفظ
+          return false;
+        }
+        return result;
       });
+      console.log(`🔍 Filter visible members (hidden): ${beforeFilter} -> ${filtered.length}`);
     }
 
     // Filter by privacy
@@ -256,19 +266,26 @@ export default function TelegramGroupsPage() {
 
     // Filter by can send
     if (searchFilterCanSend === 'yes') {
+      const beforeFilter = filtered.length;
       filtered = filtered.filter(group => {
-        // إذا كان الحقل موجود، استخدمه
+        // إذا كان can_send موجود، استخدمه
         if (group.can_send !== undefined && group.can_send !== null) {
           return group.can_send === true;
         }
-        // إذا كان is_closed موجود، نستخدمه
+        // إذا كان is_closed موجود، نستخدمه (إذا كان false، يعني يمكن الإرسال)
         if (group.is_closed !== undefined && group.is_closed !== null) {
           return group.is_closed === false;
+        }
+        // إذا كان is_restricted موجود، نستخدمه (إذا كان false، يعني يمكن الإرسال)
+        if (group.is_restricted !== undefined && group.is_restricted !== null) {
+          return group.is_restricted === false;
         }
         // إذا لم يكن موجود، نعتبره يمكن الإرسال (افتراضي)
         return true;
       });
+      console.log(`🔍 Filter can send (yes): ${beforeFilter} -> ${filtered.length}`);
     } else if (searchFilterCanSend === 'no') {
+      const beforeFilter = filtered.length;
       filtered = filtered.filter(group => {
         // إذا كان can_send موجود و false
         if (group.can_send !== undefined && group.can_send !== null) {
@@ -278,9 +295,14 @@ export default function TelegramGroupsPage() {
         if (group.is_closed !== undefined && group.is_closed !== null) {
           return group.is_closed === true;
         }
+        // إذا كان is_restricted موجود و true (المقيدة قد تكون مغلقة)
+        if (group.is_restricted !== undefined && group.is_restricted !== null) {
+          return group.is_restricted === true;
+        }
         // إذا لم يكن موجود، لا نضعه في النتائج (لأننا لا نعرف حالته)
         return false;
       });
+      console.log(`🔍 Filter can send (no): ${beforeFilter} -> ${filtered.length}`);
     }
 
     // Filter by restricted
