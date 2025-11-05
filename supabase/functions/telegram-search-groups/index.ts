@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
                 api_hash: api_hash,
                 query: query,
                 limit: limit || 20,
-                groups_only: true
+                groups_only: false  // البحث في جميع المجموعات والقنوات بدون قيود
             };
 
             console.log('Calling Backend:', `${TELEGRAM_BACKEND_URL}/groups/search`);

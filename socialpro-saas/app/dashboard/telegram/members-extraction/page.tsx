@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
+import TelegramGroupFilter, { GroupFilterOptions } from '@/components/telegram-group-filter'
 import { 
   UserPlus, 
   Search, 
@@ -29,6 +30,7 @@ interface TelegramGroup {
   members_count: number
   type: string
   session_id: string
+  is_active?: boolean  // حالة النشاط
   members_visible?: boolean  // للتوافق مع الكود القديم
   members_visibility_type?: 'fully_visible' | 'admin_only' | 'hidden'  // نوع ظهور الأعضاء
   has_visible_participants?: boolean  // للتوافق مع البيانات القديمة
@@ -67,17 +69,29 @@ export default function MembersExtractionPage() {
   const [userGroups, setUserGroups] = useState<Set<number>>(new Set()) // مجموعة IDs المجموعات التي المستخدم عضو فيها
   const [deletingGroup, setDeletingGroup] = useState<string | null>(null)
   
-  // الفلاتر المتقدمة
-  const [filterVisibleMembers, setFilterVisibleMembers] = useState<'all' | 'fully_visible' | 'admin_only' | 'hidden'>('all')
-  const [filterPrivacy, setFilterPrivacy] = useState<'all' | 'public' | 'private'>('all')
-  const [filterCanSend, setFilterCanSend] = useState<'all' | 'yes' | 'no'>('all')
-  const [filterRestricted, setFilterRestricted] = useState<'all' | 'yes' | 'no'>('all')
-  const [showFilters, setShowFilters] = useState(false)
+  // الفلتر الشامل
+  const [filters, setFilters] = useState<GroupFilterOptions>({
+    type: 'all',
+    membersVisibility: 'all',
+    privacy: 'all',
+    canSend: 'all',
+    restricted: 'all',
+    membersCountMin: undefined,
+    membersCountMax: undefined,
+    sessionId: undefined,
+    isActive: 'all',
+    searchText: undefined
+  })
 
   useEffect(() => {
     setMounted(true)
     fetchData()
   }, [])
+
+  // تحديث الفلترة عند تغيير الفلاتر أو البيانات
+  useEffect(() => {
+    // الفلترة تحدث تلقائياً في applyFilters()
+  }, [groups, filters, searchQuery])
 
   const fetchData = async () => {
     try {
@@ -395,79 +409,71 @@ export default function MembersExtractionPage() {
     }
   }
 
-  // فلترة متقدمة للمجموعات
-  useEffect(() => {
-    // سيتم تطبيق الفلترة في filteredGroups
-  }, [groups, searchQuery, filterVisibleMembers, filterPrivacy, filterCanSend, filterRestricted])
-
+  // فلترة متقدمة للمجموعات باستخدام الفلتر الشامل
   const applyFilters = () => {
     let filtered = [...groups]
 
-    // Filter by search query
-    if (searchQuery) {
+    // Filter by search query (من البحث النصي أو من الفلتر)
+    const searchText = filters.searchText || searchQuery
+    if (searchText) {
       filtered = filtered.filter(group => 
-        group.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        group.username?.toLowerCase().includes(searchQuery.toLowerCase())
+        group.title.toLowerCase().includes(searchText.toLowerCase()) ||
+        group.username?.toLowerCase().includes(searchText.toLowerCase())
       )
     }
 
-    // Filter by visible members (using members_visibility_type)
-    if (filterVisibleMembers === 'fully_visible') {
+    // Filter by type
+    if (filters.type === 'groups_only') {
+      filtered = filtered.filter(group => group.type === 'group' || group.type === 'supergroup')
+    } else if (filters.type !== 'all') {
+      // مطابقة نوع المجموعة (دعم 'channel' و 'broadcast')
       filtered = filtered.filter(group => {
-        // استخدام members_visibility_type أولاً
-        if (group.members_visibility_type === 'fully_visible') {
-          return true;
+        if (filters.type === 'channel') {
+          return group.type === 'channel' || group.type === 'broadcast'
         }
-        // للتوافق مع الكود القديم
-        if (group.members_visibility_type === undefined && group.members_visible === true) {
-          return true;
-        }
-        if (group.members_visibility_type === undefined && group.members_visible === undefined && group.has_visible_participants === true) {
-          return true;
-        }
-        return false;
-      });
-    } else if (filterVisibleMembers === 'admin_only') {
-      filtered = filtered.filter(group => {
-        return group.members_visibility_type === 'admin_only';
-      });
-    } else if (filterVisibleMembers === 'hidden') {
-      filtered = filtered.filter(group => {
-        // استخدام members_visibility_type أولاً
-        if (group.members_visibility_type === 'hidden') {
-          return true;
-        }
-        // للتوافق مع الكود القديم
-        if (group.members_visibility_type === undefined && group.members_visible === false) {
-          return true;
-        }
-        if (group.members_visibility_type === undefined && group.members_visible === undefined && group.has_visible_participants === false) {
-          return true;
-        }
-        return false;
-      });
+        return group.type === filters.type
+      })
     }
 
-    // Filter by privacy (خاصة/عامة)
-    if (filterPrivacy === 'public') {
+    // Filter by visible members (using members_visibility_type)
+    if (filters.membersVisibility === 'fully_visible') {
+      filtered = filtered.filter(group => {
+        if (group.members_visibility_type === 'fully_visible') return true
+        if (group.members_visibility_type === undefined && group.members_visible === true) return true
+        if (group.members_visibility_type === undefined && group.members_visible === undefined && group.has_visible_participants === true) return true
+        return false
+      })
+    } else if (filters.membersVisibility === 'admin_only') {
+      filtered = filtered.filter(group => group.members_visibility_type === 'admin_only')
+    } else if (filters.membersVisibility === 'hidden') {
+      filtered = filtered.filter(group => {
+        if (group.members_visibility_type === 'hidden') return true
+        if (group.members_visibility_type === undefined && group.members_visible === false) return true
+        if (group.members_visibility_type === undefined && group.members_visible === undefined && group.has_visible_participants === false) return true
+        return false
+      })
+    }
+
+    // Filter by privacy
+    if (filters.privacy === 'public') {
       filtered = filtered.filter(group => 
         group.is_private === false || 
         (group.is_private === undefined && group.username !== null)
       )
-    } else if (filterPrivacy === 'private') {
+    } else if (filters.privacy === 'private') {
       filtered = filtered.filter(group => 
         group.is_private === true || 
         (group.is_private === undefined && group.username === null)
       )
     }
 
-    // Filter by can send (يمكن الإرسال)
-    if (filterCanSend === 'yes') {
+    // Filter by can send
+    if (filters.canSend === 'yes') {
       filtered = filtered.filter(group => 
         group.can_send === true || 
         (group.can_send === undefined && group.is_closed !== true && group.is_closed !== undefined)
       )
-    } else if (filterCanSend === 'no') {
+    } else if (filters.canSend === 'no') {
       filtered = filtered.filter(group => 
         group.can_send === false || 
         (group.can_send === undefined && group.is_closed === true) ||
@@ -475,34 +481,35 @@ export default function MembersExtractionPage() {
       )
     }
 
-    // Filter by restricted (مقيدة)
-    if (filterRestricted === 'yes') {
+    // Filter by restricted
+    if (filters.restricted === 'yes') {
       filtered = filtered.filter(group => group.is_restricted === true)
-    } else if (filterRestricted === 'no') {
+    } else if (filters.restricted === 'no') {
       filtered = filtered.filter(group => 
         group.is_restricted === false || 
         group.is_restricted === undefined
       )
     }
 
-    console.log('🔍 Filtered groups:', {
-      total: groups.length,
-      filtered: filtered.length,
-      filters: {
-        visibleMembers: filterVisibleMembers,
-        privacy: filterPrivacy,
-        canSend: filterCanSend,
-        restricted: filterRestricted
-      },
-      sampleGroup: filtered[0] ? {
-        title: filtered[0].title,
-        members_visible: filtered[0].members_visible,
-        has_visible_participants: filtered[0].has_visible_participants,
-        is_private: filtered[0].is_private,
-        can_send: filtered[0].can_send,
-        is_restricted: filtered[0].is_restricted
-      } : null
-    })
+    // Filter by session
+    if (filters.sessionId && filters.sessionId !== 'all') {
+      filtered = filtered.filter(group => group.session_id === filters.sessionId)
+    }
+
+    // Filter by members count range
+    if (filters.membersCountMin !== undefined) {
+      filtered = filtered.filter(group => group.members_count >= filters.membersCountMin!)
+    }
+    if (filters.membersCountMax !== undefined) {
+      filtered = filtered.filter(group => group.members_count <= filters.membersCountMax!)
+    }
+
+    // Filter by active status
+    if (filters.isActive === 'yes') {
+      filtered = filtered.filter(group => group.is_active === true)
+    } else if (filters.isActive === 'no') {
+      filtered = filtered.filter(group => group.is_active === false)
+    }
 
     return filtered
   }
@@ -609,9 +616,9 @@ export default function MembersExtractionPage() {
         </div>
       </div>
 
-      {/* Search and Filters */}
+      {/* Search and Session Selection */}
       <div className="bg-white rounded-2xl border-2 border-gray-100 p-6">
-        <div className="flex flex-col sm:flex-row gap-4">
+        <div className="flex flex-col sm:flex-row gap-4 mb-4">
           <div className="flex-1 relative">
             <Search className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
             <input
@@ -637,14 +644,6 @@ export default function MembersExtractionPage() {
             </select>
           )}
           <button 
-            onClick={() => setShowFilters(!showFilters)}
-            className="flex items-center gap-2 px-6 py-3 bg-purple-50 hover:bg-purple-100 text-purple-600 rounded-xl font-medium transition-colors"
-          >
-            <Filter className="w-5 h-5" />
-            <span>فلاتر متقدمة</span>
-            <ChevronDown className={`w-4 h-4 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
-          </button>
-          <button 
             onClick={fetchData}
             className="flex items-center gap-2 px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium transition-colors"
           >
@@ -652,75 +651,36 @@ export default function MembersExtractionPage() {
             <span>تحديث</span>
           </button>
         </div>
-
-        {/* Advanced Filters */}
-        {showFilters && (
-          <div className="mt-4 pt-4 border-t border-gray-200 grid grid-cols-1 md:grid-cols-4 gap-4">
-            {/* Visible Members Filter */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">ظهور الأعضاء</label>
-              <select
-                value={filterVisibleMembers}
-                onChange={(e) => setFilterVisibleMembers(e.target.value as any)}
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-              >
-                <option value="all">الكل</option>
-                <option value="fully_visible">أعضاء ظاهرين بالكامل</option>
-                <option value="admin_only">الإدمن فقط ظاهرين</option>
-                <option value="hidden">أعضاء مخفيين</option>
-              </select>
-            </div>
-
-            {/* Privacy Filter */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">خاصة/عامة</label>
-              <select
-                value={filterPrivacy}
-                onChange={(e) => setFilterPrivacy(e.target.value as any)}
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-              >
-                <option value="all">الكل</option>
-                <option value="public">عامة (لها username)</option>
-                <option value="private">خاصة (بدون username)</option>
-              </select>
-            </div>
-
-            {/* Can Send Filter */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">يمكن الإرسال</label>
-              <select
-                value={filterCanSend}
-                onChange={(e) => setFilterCanSend(e.target.value as any)}
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-              >
-                <option value="all">الكل</option>
-                <option value="yes">يمكن الإرسال</option>
-                <option value="no">مغلقة/لا يمكن الإرسال</option>
-              </select>
-            </div>
-
-            {/* Restricted Filter */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">مقيدة</label>
-              <select
-                value={filterRestricted}
-                onChange={(e) => setFilterRestricted(e.target.value as any)}
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-              >
-                <option value="all">الكل</option>
-                <option value="no">غير مقيدة</option>
-                <option value="yes">مقيدة</option>
-              </select>
-            </div>
-          </div>
-        )}
         {sessions.length === 0 && (
-          <div className="mt-4 bg-orange-50 border border-orange-200 rounded-xl p-4 text-center">
+          <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 text-center">
             <AlertCircle className="w-5 h-5 text-orange-600 mx-auto mb-2" />
             <p className="text-orange-700 text-sm">لا توجد جلسات نشطة. أضف جلسة من صفحة الجلسات للانضمام للمجموعات.</p>
           </div>
         )}
       </div>
+
+      {/* الفلتر الشامل */}
+      <TelegramGroupFilter
+        filters={filters}
+        onFiltersChange={setFilters}
+        onReset={() => {
+          setFilters({
+            type: 'all',
+            membersVisibility: 'all',
+            privacy: 'all',
+            canSend: 'all',
+            restricted: 'all',
+            membersCountMin: undefined,
+            membersCountMax: undefined,
+            sessionId: undefined,
+            isActive: 'all',
+            searchText: undefined
+          })
+          setSearchQuery('')
+        }}
+        showAdvanced={true}
+        sessions={sessions.map(s => ({ id: s.id, session_name: s.session_name }))}
+      />
 
       {/* Groups List */}
       <div className="space-y-4">

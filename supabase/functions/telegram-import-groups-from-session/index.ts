@@ -156,25 +156,18 @@ Deno.serve(async (req) => {
 
         console.log(`تم جلب ${backendData.groups.length} مجموعة من Backend`);
 
-        // تصفية المجموعات: فقط المجموعات (supergroups/groups) وليس القنوات
-        const filteredGroups = backendData.groups.filter((group: any) => {
-            // تخطي القنوات (channels)
-            if (group.type === 'channel' || group.type === 'broadcast') {
-                console.log(`تخطي القناة: ${group.title} (type: ${group.type})`);
-                return false;
-            }
-            // فقط المجموعات (supergroups أو groups)
-            return group.type === 'supergroup' || group.type === 'group';
-        });
+        // استيراد جميع المجموعات والقنوات بدون أي فلترة
+        // لا نستبعد أي مجموعات أو قنوات
+        const filteredGroups = backendData.groups;  // جميع المجموعات بدون فلترة
 
-        console.log(`بعد التصفية: ${filteredGroups.length} مجموعة (تم استبعاد القنوات)`);
+        console.log(`استيراد جميع المجموعات والقنوات: ${filteredGroups.length} مجموعة/قناة`);
 
         if (filteredGroups.length === 0) {
             return new Response(JSON.stringify({
                 success: true,
                 groups: [],
                 total: 0,
-                message: 'لم يتم العثور على مجموعات (تم استبعاد القنوات)'
+                message: 'لم يتم العثور على مجموعات أو قنوات'
             }), {
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' }
             });
