@@ -88,35 +88,66 @@ Deno.serve(async (req) => {
         }
 
         const group = groups[0];
-        const telegram_group_id = group.group_id; // استخدام group_id مباشرة
+        // تحويل group_id إلى int بشكل صحيح
+        let telegram_group_id: number;
+        if (typeof group.group_id === 'number') {
+            telegram_group_id = group.group_id;
+        } else if (typeof group.group_id === 'string') {
+            const parsed = parseInt(group.group_id);
+            if (isNaN(parsed)) {
+                throw new Error(`group_id غير صالح: ${group.group_id}`);
+            }
+            telegram_group_id = parsed;
+        } else {
+            throw new Error(`group_id غير صالح: ${group.group_id} (type: ${typeof group.group_id})`);
+        }
 
         // استخراج الأعضاء عبر Backend
-        console.log(`استخراج الأعضاء من المجموعة: ${group.title} (group_id: ${telegram_group_id})`);
+        console.log(`استخراج الأعضاء من المجموعة: ${group.title} (group_id: ${telegram_group_id}, type: ${typeof telegram_group_id})`);
         console.log(`TELEGRAM_BACKEND_URL: ${TELEGRAM_BACKEND_URL}`);
         console.log(`Session ID: ${session_id}, User ID: ${user_id}`);
+        console.log(`Group username: ${group.username || 'غير متوفر'}`);
         
         // التحقق من أن session_string موجود
         if (!session.session_string) {
             throw new Error('session_string مفقود في بيانات الجلسة');
         }
 
+        // التحقق من api_id و api_hash
+        if (!session.api_id || !session.api_hash) {
+            throw new Error('api_id أو api_hash مفقود في بيانات الجلسة');
+        }
+
         const requestBody = {
             session_string: session.session_string,
-            api_id: session.api_id,
-            api_hash: session.api_hash,
-            group_id: telegram_group_id,
-            limit: limit,
-            username: group.username || null  // إضافة username إذا كان متوفراً
+            api_id: String(session.api_id), // تأكد من أن api_id هو string
+            api_hash: String(session.api_hash), // تأكد من أن api_hash هو string
+            group_id: telegram_group_id, // int
+            limit: parseInt(String(limit || 100)), // int
+            username: group.username ? String(group.username).replace('@', '') : null  // إزالة @ إذا كان موجوداً
         };
 
-        console.log(`Request body keys: ${Object.keys(requestBody).join(', ')}`);
+        console.log(`Request body:`, {
+            ...requestBody,
+            session_string: '***HIDDEN***',
+            api_hash: '***HIDDEN***'
+        });
+
+        // التحقق من TELEGRAM_BACKEND_URL
+        if (!TELEGRAM_BACKEND_URL || TELEGRAM_BACKEND_URL === 'http://localhost:8000') {
+            throw new Error('TELEGRAM_BACKEND_URL غير مضبوط. يرجى إضافة Environment Variable في Supabase.');
+        }
         
         let extractResponse;
         try {
-            extractResponse = await fetch(`${TELEGRAM_BACKEND_URL}/members/extract`, {
+            const backendUrl = `${TELEGRAM_BACKEND_URL}/members/extract`;
+            console.log(`Calling Backend: ${backendUrl}`);
+            
+            extractResponse = await fetch(backendUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json'
                 },
                 body: JSON.stringify(requestBody),
                 // إضافة timeout
@@ -166,18 +197,32 @@ Deno.serve(async (req) => {
         }
 
         const extractResult = await extractResponse.json();
-        console.log(`تم استخراج ${extractResult.members?.length || 0} عضو من Backend`);
+        console.log(`Backend Response:`, {
+            success: extractResult.success,
+            total: extractResult.total,
+            members_count: extractResult.members?.length || 0,
+            message: extractResult.message
+        });
 
         if (!extractResult.success) {
-            throw new Error(extractResult.message || 'فشل في استخراج الأعضاء من Backend');
+            const errorMsg = extractResult.message || extractResult.detail || 'فشل في استخراج الأعضاء من Backend';
+            console.error('Backend returned success=false:', errorMsg);
+            throw new Error(errorMsg);
         }
 
         if (!extractResult.members || !Array.isArray(extractResult.members)) {
+            console.error('Backend did not return valid members array:', extractResult);
             throw new Error('لم يتم إرجاع قائمة أعضاء صالحة من Backend');
         }
 
         if (extractResult.members.length === 0) {
-            console.log('لم يتم العثور على أعضاء في المجموعة');
+            console.warn(`لم يتم العثور على أعضاء في المجموعة (group_id: ${telegram_group_id}, title: ${group.title})`);
+            console.warn('الأسباب المحتملة:');
+            console.warn('1. المستخدم ليس عضواً في المجموعة');
+            console.warn('2. المجموعة لا تحتوي على أعضاء');
+            console.warn('3. المجموعة مقيدة (restricted)');
+            console.warn('4. جميع الأعضاء بوتات (تم تخطيهم)');
+            
             return new Response(
                 JSON.stringify({
                     data: {
@@ -187,14 +232,17 @@ Deno.serve(async (req) => {
                         group_id: telegram_group_id,
                         group_title: group.title,
                         extracted_at: new Date().toISOString(),
-                        message: 'لم يتم العثور على أعضاء في المجموعة'
-                    }
+                        message: 'لم يتم العثور على أعضاء في المجموعة. تأكد من أنك عضو في المجموعة وأن المجموعة تحتوي على أعضاء.'
+                    },
+                    warning: 'لم يتم العثور على أعضاء. قد تكون المجموعة فارغة أو المستخدم ليس عضواً فيها.'
                 }),
                 {
                     headers: { ...corsHeaders, 'Content-Type': 'application/json' }
                 }
             );
         }
+
+        console.log(`تم استخراج ${extractResult.members.length} عضو من Backend`);
 
         // حفظ الأعضاء في قاعدة البيانات
         const members = extractResult.members.map((member: any) => {

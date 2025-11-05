@@ -184,8 +184,20 @@ export default function MembersExtractionPage() {
 
       const inserted = data?.data?.inserted || 0
       const skipped = data?.data?.skipped || 0
+      const total = data?.data?.total_extracted || 0
 
-      setSuccess(`تم استخراج ${inserted} عضو بنجاح${skipped > 0 ? ` (تم تخطي ${skipped} عضو موجود مسبقاً)` : ''}`)
+      // إذا كان هناك warning، اعرضه
+      if (data?.warning) {
+        setError(data.warning)
+      }
+
+      // إذا لم يتم استخراج أي عضو، اعرض رسالة واضحة
+      if (total === 0 && inserted === 0) {
+        const message = data?.data?.message || 'لم يتم العثور على أعضاء في المجموعة'
+        setError(message + '. تأكد من أنك عضو في المجموعة وأن المجموعة تحتوي على أعضاء.')
+      } else {
+        setSuccess(`تم استخراج ${inserted} عضو بنجاح${skipped > 0 ? ` (تم تخطي ${skipped} عضو موجود مسبقاً)` : ''}`)
+      }
 
       // إعادة تحميل البيانات بعد ثانية
       setTimeout(() => {
