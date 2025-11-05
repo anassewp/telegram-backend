@@ -13,6 +13,8 @@ from typing import List, Optional, Dict
 import asyncio
 from datetime import datetime, timedelta
 from collections import defaultdict
+import random
+import json
 
 # FastAPI app
 app = FastAPI(title="Telegram Backend API")
@@ -88,6 +90,53 @@ class JoinGroupRequest(BaseModel):
     username: Optional[str] = None  # username للمجموعة
     invite_link: Optional[str] = None  # رابط الدعوة
 
+# Models جديدة للميزات المتقدمة
+class SendToMemberRequest(BaseModel):
+    session_string: str
+    api_id: str
+    api_hash: str
+    member_telegram_id: int
+    message: str
+    personalize: Optional[bool] = False  # تخصيص بالاسم
+
+class CampaignCreateRequest(BaseModel):
+    name: str
+    campaign_type: str  # 'groups', 'members', 'mixed'
+    message_text: str
+    target_type: str  # 'groups', 'members', 'both'
+    selected_groups: Optional[List[int]] = []
+    selected_members: Optional[List[int]] = []
+    session_ids: List[str]  # قائمة session_ids
+    distribution_strategy: Optional[str] = 'equal'  # 'equal', 'round_robin', 'random', 'weighted'
+    max_messages_per_session: Optional[int] = 100
+    max_messages_per_day: Optional[int] = 200
+    delay_between_messages_min: Optional[int] = 30
+    delay_between_messages_max: Optional[int] = 90
+    delay_variation: Optional[bool] = True
+    exclude_sent_members: Optional[bool] = True
+    exclude_bots: Optional[bool] = True
+    exclude_premium: Optional[bool] = False
+    exclude_verified: Optional[bool] = False
+    exclude_scam: Optional[bool] = True
+    exclude_fake: Optional[bool] = True
+    personalize_messages: Optional[bool] = False
+    vary_emojis: Optional[bool] = False
+    message_templates: Optional[List[str]] = []
+    schedule_at: Optional[str] = None
+
+class TransferMembersBatchRequest(BaseModel):
+    session_ids: List[str]  # قائمة session_ids
+    api_ids: Dict[str, str]  # {session_id: api_id}
+    api_hashes: Dict[str, str]  # {session_id: api_hash}
+    session_strings: Dict[str, str]  # {session_id: session_string}
+    source_group_id: int
+    target_group_id: int
+    member_ids: List[int]
+    distribution_strategy: Optional[str] = 'equal'
+    delay_min: Optional[int] = 60  # ثواني
+    delay_max: Optional[int] = 120  # ثواني
+    max_per_day_per_session: Optional[int] = 50
+
 # Dictionary to store temporary clients (في الإنتاج، استخدم Redis)
 temp_clients = {}
 
@@ -118,6 +167,153 @@ def record_message_sent(session_string: str):
     تسجيل رسالة مرسلة
     """
     rate_limit_store[session_string].append(datetime.now())
+
+# ============================================
+# الوظائف المساعدة للميزات المتقدمة
+# ============================================
+
+def smart_delay(min_seconds: int = 30, max_seconds: int = 90, variation: bool = True) -> int:
+    """
+    حساب تأخير ذكي بين الرسائل (30-90 ثانية عشوائي)
+    """
+    if variation:
+        # تنويع عشوائي
+        delay = random.randint(min_seconds, max_seconds)
+        # إضافة تنويع إضافي صغير (±5 ثواني)
+        variation_amount = random.randint(-5, 5)
+        delay = max(min_seconds, min(max_seconds, delay + variation_amount))
+    else:
+        # متوسط ثابت
+        delay = (min_seconds + max_seconds) // 2
+    return delay
+
+def distribute_tasks(tasks: List, session_ids: List[str], strategy: str = 'equal') -> Dict[str, List]:
+    """
+    توزيع المهام بين الجلسات باستخدام استراتيجيات مختلفة
+    """
+    distribution = {session_id: [] for session_id in session_ids}
+    
+    if not session_ids or not tasks:
+        return distribution
+    
+    if strategy == 'equal':
+        # توزيع متساوي
+        tasks_per_session = len(tasks) // len(session_ids)
+        remainder = len(tasks) % len(session_ids)
+        
+        start_idx = 0
+        for i, session_id in enumerate(session_ids):
+            end_idx = start_idx + tasks_per_session + (1 if i < remainder else 0)
+            distribution[session_id] = tasks[start_idx:end_idx]
+            start_idx = end_idx
+    
+    elif strategy == 'round_robin':
+        # توزيع دوري
+        for i, task in enumerate(tasks):
+            session_id = session_ids[i % len(session_ids)]
+            distribution[session_id].append(task)
+    
+    elif strategy == 'random':
+        # توزيع عشوائي
+        for task in tasks:
+            session_id = random.choice(session_ids)
+            distribution[session_id].append(task)
+    
+    elif strategy == 'weighted':
+        # توزيع مرجح (حسب عدد المهام المكتملة لكل جلسة)
+        # في هذا الإصدار، نستخدم توزيع متساوي (يمكن تحسينه لاحقاً)
+        tasks_per_session = len(tasks) // len(session_ids)
+        remainder = len(tasks) % len(session_ids)
+        
+        start_idx = 0
+        for i, session_id in enumerate(session_ids):
+            end_idx = start_idx + tasks_per_session + (1 if i < remainder else 0)
+            distribution[session_id] = tasks[start_idx:end_idx]
+            start_idx = end_idx
+    
+    return distribution
+
+def personalize_message(message: str, first_name: Optional[str] = None, username: Optional[str] = None) -> str:
+    """
+    تخصيص الرسالة بالاسم
+    """
+    personalized = message
+    
+    if first_name:
+        # استبدال {name} أو {first_name} بالاسم الأول
+        personalized = personalized.replace('{name}', first_name)
+        personalized = personalized.replace('{first_name}', first_name)
+        personalized = personalized.replace('{NAME}', first_name.upper())
+        personalized = personalized.replace('{FIRST_NAME}', first_name.upper())
+    
+    if username:
+        # استبدال {username} بالاسم المستخدم
+        personalized = personalized.replace('{username}', username)
+        personalized = personalized.replace('{USERNAME}', username.upper())
+    
+    return personalized
+
+def vary_emoji(message: str) -> str:
+    """
+    تنويع الإيموجي في الرسالة
+    """
+    # قائمة إيموجي بديلة
+    emojis = ['👋', '🙋', '👌', '👍', '💪', '🎉', '🚀', '✨', '⭐', '💫']
+    
+    # البحث عن إيموجي في الرسالة واستبدالها
+    # في هذا الإصدار البسيط، نضيف إيموجي عشوائي في النهاية إذا لم يكن موجود
+    if not any(ord(char) > 0x1F000 for char in message):  # التحقق من وجود إيموجي
+        emoji = random.choice(emojis)
+        message = f"{message} {emoji}"
+    
+    return message
+
+def filter_members(
+    members: List[Dict],
+    exclude_bots: bool = True,
+    exclude_premium: bool = False,
+    exclude_verified: bool = False,
+    exclude_scam: bool = True,
+    exclude_fake: bool = True,
+    exclude_sent_members: Optional[List[int]] = None
+) -> List[Dict]:
+    """
+    فلترة الأعضاء حسب المعايير المحددة
+    """
+    filtered = []
+    
+    if exclude_sent_members is None:
+        exclude_sent_members = []
+    
+    for member in members:
+        # التحقق من البوتات
+        if exclude_bots and member.get('is_bot', False):
+            continue
+        
+        # التحقق من Premium
+        if exclude_premium and member.get('is_premium', False):
+            continue
+        
+        # التحقق من Verified
+        if exclude_verified and member.get('is_verified', False):
+            continue
+        
+        # التحقق من Scam
+        if exclude_scam and member.get('is_scam', False):
+            continue
+        
+        # التحقق من Fake
+        if exclude_fake and member.get('is_fake', False):
+            continue
+        
+        # التحقق من الأعضاء المرسل لهم سابقاً
+        member_id = member.get('telegram_user_id')
+        if member_id and member_id in exclude_sent_members:
+            continue
+        
+        filtered.append(member)
+    
+    return filtered
 
 @app.get("/")
 async def root():
@@ -1053,6 +1249,309 @@ async def join_group(request: JoinGroupRequest):
             await client.disconnect()
             raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
         
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.post("/messages/send-to-member")
+async def send_to_member(request: SendToMemberRequest):
+    """
+    إرسال رسالة مباشرة إلى عضو (DM)
+    """
+    try:
+        # إنشاء client من session_string
+        client = TelegramClient(
+            StringSession(request.session_string),
+            int(request.api_id),
+            request.api_hash
+        )
+        
+        await client.connect()
+        
+        if not await client.is_user_authorized():
+            raise HTTPException(status_code=401, detail="Session expired or invalid")
+        
+        # البحث عن العضو
+        try:
+            user = await client.get_entity(request.member_telegram_id)
+        except Exception as e:
+            await client.disconnect()
+            raise HTTPException(status_code=404, detail=f"Member not found: {str(e)}")
+        
+        # التحقق من Rate Limit
+        if not check_rate_limit(request.session_string):
+            await client.disconnect()
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded. Maximum {RATE_LIMIT_MESSAGES} messages per minute. Please wait."
+            )
+        
+        # تخصيص الرسالة إذا طُلب
+        message_text = request.message
+        if request.personalize:
+            first_name = getattr(user, 'first_name', None)
+            username = getattr(user, 'username', None)
+            message_text = personalize_message(message_text, first_name, username)
+        
+        # إرسال الرسالة
+        try:
+            message = await client.send_message(user, message_text)
+            
+            # تسجيل الرسالة المرسلة
+            record_message_sent(request.session_string)
+            
+            await client.disconnect()
+            
+            return {
+                "success": True,
+                "message_id": message.id,
+                "message": "تم إرسال الرسالة بنجاح",
+                "sent_at": message.date.isoformat() if message.date else None,
+                "member_telegram_id": request.member_telegram_id
+            }
+        except FloodWaitError as e:
+            await client.disconnect()
+            raise HTTPException(
+                status_code=429,
+                detail=f"Telegram rate limit: Please wait {e.seconds} seconds before sending more messages."
+            )
+        except Exception as e:
+            await client.disconnect()
+            error_msg = str(e)
+            
+            if "flood" in error_msg.lower() or "rate limit" in error_msg.lower():
+                raise HTTPException(
+                    status_code=429,
+                    detail="Rate limit exceeded. Please wait before sending more messages."
+                )
+            elif "privacy" in error_msg.lower() or "blocked" in error_msg.lower():
+                raise HTTPException(
+                    status_code=403,
+                    detail="User has privacy settings that prevent receiving messages"
+                )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to send message: {error_msg}"
+                )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.post("/campaigns/create")
+async def create_campaign(request: CampaignCreateRequest):
+    """
+    إنشاء حملة جديدة (يجب حفظها في قاعدة البيانات من Edge Function)
+    هذا endpoint يتحقق من صحة البيانات فقط
+    """
+    # التحقق من صحة البيانات
+    if request.campaign_type not in ['groups', 'members', 'mixed']:
+        raise HTTPException(status_code=400, detail="Invalid campaign_type. Must be 'groups', 'members', or 'mixed'")
+    
+    if request.target_type not in ['groups', 'members', 'both']:
+        raise HTTPException(status_code=400, detail="Invalid target_type. Must be 'groups', 'members', or 'both'")
+    
+    if request.distribution_strategy not in ['equal', 'round_robin', 'random', 'weighted']:
+        raise HTTPException(status_code=400, detail="Invalid distribution_strategy")
+    
+    if not request.session_ids:
+        raise HTTPException(status_code=400, detail="At least one session_id is required")
+    
+    if request.delay_between_messages_min > request.delay_between_messages_max:
+        raise HTTPException(status_code=400, detail="delay_between_messages_min must be <= delay_between_messages_max")
+    
+    # التحقق من وجود targets
+    if request.target_type in ['groups', 'both'] and not request.selected_groups:
+        raise HTTPException(status_code=400, detail="selected_groups is required for this target_type")
+    
+    if request.target_type in ['members', 'both'] and not request.selected_members:
+        raise HTTPException(status_code=400, detail="selected_members is required for this target_type")
+    
+    return {
+        "success": True,
+        "message": "Campaign data validated successfully",
+        "campaign": {
+            "name": request.name,
+            "campaign_type": request.campaign_type,
+            "target_type": request.target_type,
+            "total_sessions": len(request.session_ids),
+            "total_groups": len(request.selected_groups) if request.selected_groups else 0,
+            "total_members": len(request.selected_members) if request.selected_members else 0
+        }
+    }
+
+@app.post("/campaigns/start/{campaign_id}")
+async def start_campaign(campaign_id: str):
+    """
+    بدء تنفيذ الحملة (يجب أن يتم استدعاؤه من Edge Function مع بيانات الحملة)
+    """
+    # هذا endpoint يحتاج بيانات الحملة من قاعدة البيانات
+    # سيتم تنفيذه في Edge Function
+    return {
+        "success": True,
+        "message": "Campaign start endpoint - to be implemented in Edge Function",
+        "campaign_id": campaign_id
+    }
+
+@app.post("/campaigns/pause/{campaign_id}")
+async def pause_campaign(campaign_id: str):
+    """
+    إيقاف الحملة مؤقتاً
+    """
+    return {
+        "success": True,
+        "message": "Campaign pause endpoint - to be implemented in Edge Function",
+        "campaign_id": campaign_id
+    }
+
+@app.post("/campaigns/resume/{campaign_id}")
+async def resume_campaign(campaign_id: str):
+    """
+    استئناف الحملة
+    """
+    return {
+        "success": True,
+        "message": "Campaign resume endpoint - to be implemented in Edge Function",
+        "campaign_id": campaign_id
+    }
+
+@app.post("/members/transfer-batch")
+async def transfer_members_batch(request: TransferMembersBatchRequest):
+    """
+    نقل دفعة من الأعضاء مع توزيع ذكي وتأخير ذكي
+    """
+    try:
+        if not request.session_ids or not request.member_ids:
+            raise HTTPException(status_code=400, detail="session_ids and member_ids are required")
+        
+        # توزيع المهام بين الجلسات
+        distributed_members = distribute_tasks(
+            request.member_ids,
+            request.session_ids,
+            request.distribution_strategy
+        )
+        
+        results = {
+            "transferred": [],
+            "failed": [],
+            "total_requested": len(request.member_ids),
+            "total_transferred": 0,
+            "total_failed": 0,
+            "session_results": {}
+        }
+        
+        # معالجة كل جلسة
+        for session_id, member_ids in distributed_members.items():
+            if not member_ids:
+                continue
+            
+            session_string = request.session_strings.get(session_id)
+            api_id = request.api_ids.get(session_id)
+            api_hash = request.api_hashes.get(session_id)
+            
+            if not all([session_string, api_id, api_hash]):
+                results["failed"].extend([
+                    {"member_id": mid, "error": f"Missing session data for {session_id}"}
+                    for mid in member_ids
+                ])
+                continue
+            
+            try:
+                # إنشاء client
+                client = TelegramClient(
+                    StringSession(session_string),
+                    int(api_id),
+                    api_hash
+                )
+                
+                await client.connect()
+                
+                if not await client.is_user_authorized():
+                    await client.disconnect()
+                    results["failed"].extend([
+                        {"member_id": mid, "error": "Session expired or invalid"}
+                        for mid in member_ids
+                    ])
+                    continue
+                
+                # البحث عن المجموعات
+                try:
+                    source_entity = await client.get_entity(request.source_group_id)
+                    target_entity = await client.get_entity(request.target_group_id)
+                except Exception as e:
+                    await client.disconnect()
+                    results["failed"].extend([
+                        {"member_id": mid, "error": f"Group not found: {str(e)}"}
+                        for mid in member_ids
+                    ])
+                    continue
+                
+                # نقل الأعضاء
+                session_transferred = []
+                session_failed = []
+                
+                for member_id in member_ids:
+                    try:
+                        # تأخير ذكي قبل كل عملية نقل
+                        delay = smart_delay(request.delay_min, request.delay_max, variation=True)
+                        await asyncio.sleep(delay)
+                        
+                        # الحصول على معلومات العضو
+                        user = await client.get_entity(member_id)
+                        
+                        # إضافة العضو إلى المجموعة الهدف
+                        await client(AddChatUserRequest(
+                            chat_id=target_entity.id,
+                            user_id=user.id
+                        ))
+                        
+                        session_transferred.append({
+                            "telegram_user_id": member_id,
+                            "username": getattr(user, 'username', None),
+                            "first_name": getattr(user, 'first_name', None)
+                        })
+                        
+                    except FloodWaitError as e:
+                        wait_time = e.seconds
+                        session_failed.append({
+                            "telegram_user_id": member_id,
+                            "error": f"Rate limit: wait {wait_time} seconds"
+                        })
+                        await asyncio.sleep(wait_time)
+                    except Exception as e:
+                        error_msg = str(e)
+                        session_failed.append({
+                            "telegram_user_id": member_id,
+                            "error": error_msg
+                        })
+                
+                await client.disconnect()
+                
+                results["transferred"].extend(session_transferred)
+                results["failed"].extend(session_failed)
+                results["session_results"][session_id] = {
+                    "transferred": len(session_transferred),
+                    "failed": len(session_failed)
+                }
+                
+            except Exception as e:
+                results["failed"].extend([
+                    {"member_id": mid, "error": f"Session error: {str(e)}"}
+                    for mid in member_ids
+                ])
+        
+        results["total_transferred"] = len(results["transferred"])
+        results["total_failed"] = len(results["failed"])
+        
+        return {
+            "success": True,
+            "data": results,
+            "message": f"تم نقل {results['total_transferred']} عضو بنجاح"
+        }
+    
     except HTTPException:
         raise
     except Exception as e:
