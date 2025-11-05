@@ -187,7 +187,8 @@ Deno.serve(async (req) => {
 
         // إدراج المجموعات واحدة تلو الأخرى لتجنب التكرارات
         for (const group of filteredGroups) {
-            const groupRecord = {
+            // بناء groupRecord مع الحقول الأساسية
+            const groupRecord: any = {
                 user_id: user_id,
                 session_id: session_id,
                 group_id: group.group_id,
@@ -195,15 +196,34 @@ Deno.serve(async (req) => {
                 username: group.username || null,
                 members_count: group.members_count || 0,
                 type: group.type || 'group',
-                is_active: true,
-                // الحقول الجديدة للفلترة
-                members_visible: group.members_visible !== undefined ? group.members_visible : true,
-                members_visibility_type: group.members_visibility_type || (group.members_visible === true ? 'fully_visible' : 'hidden'),
-                is_private: group.is_private !== undefined ? group.is_private : false,
-                is_restricted: group.is_restricted !== undefined ? group.is_restricted : false,
-                can_send: group.can_send !== undefined ? group.can_send : true,
-                is_closed: group.is_closed !== undefined ? group.is_closed : false
+                is_active: true
             };
+
+            // إضافة الحقول الجديدة للفلترة (إذا كانت موجودة في Backend response)
+            if (group.members_visible !== undefined) {
+                groupRecord.members_visible = group.members_visible;
+            }
+            
+            // إضافة members_visibility_type إذا كان موجوداً في Backend أو استخراجه من members_visible
+            if (group.members_visibility_type) {
+                groupRecord.members_visibility_type = group.members_visibility_type;
+            } else if (group.members_visible !== undefined) {
+                // Fallback: تحويل members_visible إلى members_visibility_type
+                groupRecord.members_visibility_type = group.members_visible ? 'fully_visible' : 'hidden';
+            }
+
+            if (group.is_private !== undefined) {
+                groupRecord.is_private = group.is_private;
+            }
+            if (group.is_restricted !== undefined) {
+                groupRecord.is_restricted = group.is_restricted;
+            }
+            if (group.can_send !== undefined) {
+                groupRecord.can_send = group.can_send;
+            }
+            if (group.is_closed !== undefined) {
+                groupRecord.is_closed = group.is_closed;
+            }
 
             try {
                 // محاولة الإدراج
@@ -224,14 +244,51 @@ Deno.serve(async (req) => {
                     insertedCount++;
                 } else {
                     const errorText = await insertResponse.text();
+                    console.error(`خطأ في إدراج مجموعة ${group.title}:`, {
+                        status: insertResponse.status,
+                        statusText: insertResponse.statusText,
+                        error: errorText,
+                        groupRecord: { ...groupRecord, user_id: '***', session_id: '***' }
+                    });
+                    
                     // إذا كان الخطأ بسبب التكرار (23505)، نتخطى المجموعة
                     if (errorText.includes('23505') || errorText.includes('duplicate key') || errorText.includes('already exists')) {
                         skippedCount++;
                         console.log(`تم تخطي المجموعة المكررة: ${group.title} (group_id: ${group.group_id})`);
+                    } else if (errorText.includes('column') && errorText.includes('does not exist')) {
+                        // إذا كان الخطأ بسبب حقل غير موجود، نحاول بدون الحقول الاختيارية
+                        console.warn(`حقل غير موجود في قاعدة البيانات، محاولة بدون الحقول الاختيارية: ${group.title}`);
+                        const minimalRecord = {
+                            user_id: user_id,
+                            session_id: session_id,
+                            group_id: group.group_id,
+                            title: group.title || '',
+                            username: group.username || null,
+                            members_count: group.members_count || 0,
+                            type: group.type || 'group',
+                            is_active: true
+                        };
+                        
+                        const retryResponse = await fetch(`${SUPABASE_URL}/rest/v1/telegram_groups`, {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+                                'apikey': SUPABASE_SERVICE_ROLE_KEY,
+                                'Content-Type': 'application/json',
+                                'Prefer': 'return=representation'
+                            },
+                            body: JSON.stringify(minimalRecord)
+                        });
+                        
+                        if (retryResponse.ok) {
+                            const inserted = await retryResponse.json();
+                            insertedGroups.push(inserted[0] || inserted);
+                            insertedCount++;
+                        } else {
+                            skippedCount++;
+                        }
                     } else {
-                        console.error(`خطأ في إدراج مجموعة ${group.title}:`, errorText);
-                        // يمكنك اختيار إما إلقاء خطأ أو تخطي المجموعة
-                        // سأختار التخطي لتجنب إيقاف العملية بالكامل
+                        // خطأ آخر، نتخطى المجموعة
                         skippedCount++;
                     }
                 }
