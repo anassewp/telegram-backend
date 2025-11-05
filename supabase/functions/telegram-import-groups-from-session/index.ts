@@ -90,17 +90,21 @@ Deno.serve(async (req) => {
         }
 
         // استدعاء Telegram Backend لاستيراد المجموعات
+        // Backend endpoint: POST /groups/import/{session_id}?api_id=xxx&api_hash=xxx&session_string=xxx
         const url = new URL(`${TELEGRAM_BACKEND_URL}/groups/import/${session_id}`);
-        url.searchParams.append('api_id', api_id);
+        url.searchParams.append('api_id', api_id.toString());
         url.searchParams.append('api_hash', api_hash);
         url.searchParams.append('session_string', session_string);
+
+        console.log('Calling Backend URL:', url.toString().replace(session_string, '***HIDDEN***'));
 
         let backendResponse;
         try {
             backendResponse = await fetch(url.toString(), {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
                 },
                 signal: AbortSignal.timeout(60000) // timeout 60 seconds
             });

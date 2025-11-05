@@ -62,19 +62,25 @@ Deno.serve(async (req) => {
         // استدعاء Python Backend للبحث الحقيقي
         let backendData;
         try {
+            const requestBody = {
+                session_string: session_string,
+                api_id: api_id.toString(),
+                api_hash: api_hash,
+                query: query,
+                limit: limit || 20,
+                groups_only: true
+            };
+
+            console.log('Calling Backend:', `${TELEGRAM_BACKEND_URL}/groups/search`);
+            console.log('Request body keys:', Object.keys(requestBody));
+
             const backendResponse = await fetch(`${TELEGRAM_BACKEND_URL}/groups/search`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
                 },
-                body: JSON.stringify({
-                    session_string: session_string,
-                    api_id: api_id,
-                    api_hash: api_hash,
-                    query: query,
-                    limit: limit || 20,
-                    groups_only: true
-                }),
+                body: JSON.stringify(requestBody),
                 signal: AbortSignal.timeout(30000) // timeout 30 seconds
             });
 
@@ -83,14 +89,19 @@ Deno.serve(async (req) => {
                 console.error('خطأ من Telegram Backend:', {
                     status: backendResponse.status,
                     statusText: backendResponse.statusText,
+                    url: `${TELEGRAM_BACKEND_URL}/groups/search`,
                     error: errorText
                 });
+
+                if (backendResponse.status === 404) {
+                    throw new Error(`Endpoint غير موجود (404). تحقق من أن Backend URL صحيح: ${TELEGRAM_BACKEND_URL}. تأكد من أن Backend يعمل وأن endpoint /groups/search موجود.`);
+                }
 
                 if (backendResponse.status === 0 || backendResponse.status === 500 || backendResponse.status === 503) {
                     throw new Error(`Telegram Backend غير متاح. تحقق من: ${TELEGRAM_BACKEND_URL} - تأكد من أن Backend يعمل أو قم بتحديث TELEGRAM_BACKEND_URL في Environment Variables`);
                 }
 
-                throw new Error(`فشل البحث في Backend: ${errorText}`);
+                throw new Error(`فشل البحث في Backend (${backendResponse.status}): ${errorText}`);
             }
 
             backendData = await backendResponse.json();
