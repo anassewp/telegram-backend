@@ -36,6 +36,11 @@ interface TelegramGroup {
   type: 'group' | 'supergroup' | 'channel';
   is_active: boolean;
   has_visible_participants?: boolean;
+  members_visible?: boolean;  // هل الأعضاء ظاهرين للجميع
+  is_private?: boolean;  // خاصة أو عامة
+  is_restricted?: boolean;  // مقيدة
+  can_send?: boolean;  // يمكن الإرسال
+  is_closed?: boolean;  // مغلقة
   created_at: string;
 }
 
@@ -160,6 +165,10 @@ export default function TelegramGroupsPage() {
   // Filters
   const [filterType, setFilterType] = useState<'all' | 'groups_only' | 'group' | 'supergroup' | 'channel'>('all');
   const [filterVisibleMembers, setFilterVisibleMembers] = useState<'all' | 'visible' | 'hidden'>('all');
+  const [filterPrivacy, setFilterPrivacy] = useState<'all' | 'public' | 'private'>('all');
+  const [filterCanSend, setFilterCanSend] = useState<'all' | 'yes' | 'no'>('all');
+  const [filterRestricted, setFilterRestricted] = useState<'all' | 'yes' | 'no'>('all');
+  const [showFilters, setShowFilters] = useState(false);
   const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
 
   useEffect(() => {
@@ -168,7 +177,7 @@ export default function TelegramGroupsPage() {
 
   useEffect(() => {
     applyFilters();
-  }, [groups, searchQuery, filterType, filterVisibleMembers, activeSessionFilter]);
+  }, [groups, searchQuery, filterType, filterVisibleMembers, filterPrivacy, filterCanSend, filterRestricted, activeSessionFilter]);
 
   const fetchData = async () => {
     try {
@@ -221,11 +230,32 @@ export default function TelegramGroupsPage() {
       filtered = filtered.filter(group => group.type === filterType);
     }
 
-    // Filter by visible members
+    // Filter by visible members (استخدام members_visible الجديد أولاً، ثم has_visible_participants للتوافق)
     if (filterVisibleMembers === 'visible') {
-      filtered = filtered.filter(group => group.has_visible_participants === true);
+      filtered = filtered.filter(group => group.members_visible === true || group.has_visible_participants === true);
     } else if (filterVisibleMembers === 'hidden') {
-      filtered = filtered.filter(group => group.has_visible_participants === false);
+      filtered = filtered.filter(group => group.members_visible === false || group.has_visible_participants === false);
+    }
+
+    // Filter by privacy (خاصة/عامة)
+    if (filterPrivacy === 'public') {
+      filtered = filtered.filter(group => group.is_private === false);
+    } else if (filterPrivacy === 'private') {
+      filtered = filtered.filter(group => group.is_private === true);
+    }
+
+    // Filter by can send (يمكن الإرسال)
+    if (filterCanSend === 'yes') {
+      filtered = filtered.filter(group => group.can_send === true);
+    } else if (filterCanSend === 'no') {
+      filtered = filtered.filter(group => group.can_send === false || group.is_closed === true);
+    }
+
+    // Filter by restricted (مقيدة)
+    if (filterRestricted === 'yes') {
+      filtered = filtered.filter(group => group.is_restricted === true);
+    } else if (filterRestricted === 'no') {
+      filtered = filtered.filter(group => group.is_restricted === false);
     }
 
     setFilteredGroups(filtered);
@@ -605,9 +635,18 @@ export default function TelegramGroupsPage() {
 
       {/* Filters */}
       <div className="bg-white p-6 rounded-2xl border border-neutral-200">
-        <div className="flex items-center gap-2 mb-4">
-          <Filter className="w-5 h-5 text-neutral-600" />
-          <h3 className="font-bold text-neutral-900">الفلاتر والبحث</h3>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Filter className="w-5 h-5 text-neutral-600" />
+            <h3 className="font-bold text-neutral-900">الفلاتر والبحث</h3>
+          </div>
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className="text-sm text-primary-600 hover:text-primary-700 font-medium flex items-center gap-2"
+          >
+            <ChevronDown className={`w-4 h-4 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
+            {showFilters ? 'إخفاء الفلاتر المتقدمة' : 'إظهار الفلاتر المتقدمة'}
+          </button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -652,10 +691,57 @@ export default function TelegramGroupsPage() {
             >
               <option value="all">الكل</option>
               <option value="visible">أعضاء ظاهرين</option>
-              <option value="hidden">أعضاء مخفيين</option>
+              <option value="hidden">أعضاء مخفيين (إدمن فقط)</option>
             </select>
           </div>
         </div>
+
+        {/* Advanced Filters */}
+        {showFilters && (
+          <div className="mt-4 pt-4 border-t border-neutral-200 grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Privacy Filter */}
+            <div>
+              <label className="block text-sm font-medium text-neutral-700 mb-2">النوع (خاصة/عامة)</label>
+              <select
+                value={filterPrivacy}
+                onChange={(e) => setFilterPrivacy(e.target.value as any)}
+                className="w-full px-4 py-2 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              >
+                <option value="all">الكل</option>
+                <option value="public">عامة (لها username)</option>
+                <option value="private">خاصة (بدون username)</option>
+              </select>
+            </div>
+
+            {/* Can Send Filter */}
+            <div>
+              <label className="block text-sm font-medium text-neutral-700 mb-2">يمكن الإرسال</label>
+              <select
+                value={filterCanSend}
+                onChange={(e) => setFilterCanSend(e.target.value as any)}
+                className="w-full px-4 py-2 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              >
+                <option value="all">الكل</option>
+                <option value="yes">يمكن الإرسال</option>
+                <option value="no">مغلقة/لا يمكن الإرسال</option>
+              </select>
+            </div>
+
+            {/* Restricted Filter */}
+            <div>
+              <label className="block text-sm font-medium text-neutral-700 mb-2">مقيدة</label>
+              <select
+                value={filterRestricted}
+                onChange={(e) => setFilterRestricted(e.target.value as any)}
+                className="w-full px-4 py-2 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              >
+                <option value="all">الكل</option>
+                <option value="no">غير مقيدة</option>
+                <option value="yes">مقيدة</option>
+              </select>
+            </div>
+          </div>
+        )}
 
         {/* Bulk Actions */}
         {filteredGroups.length > 0 && (
