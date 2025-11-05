@@ -756,7 +756,9 @@ async def extract_members(request: ExtractMembersRequest):
             if not entity:
                 error_msg = f"Group not found (group_id: {request.group_id}). "
                 error_msg += "To extract members, you must be a member of the group. "
-                error_msg += "Groups imported from global search may not be accessible for member extraction if you're not a member."
+                error_msg += "For private groups, you need to join the group first using the invite link. "
+                error_msg += "Groups imported from global search may not be accessible for member extraction if you're not a member. "
+                error_msg += "Please join the group first, then try extracting members again."
                 raise HTTPException(status_code=404, detail=error_msg)
                 
         except HTTPException:
