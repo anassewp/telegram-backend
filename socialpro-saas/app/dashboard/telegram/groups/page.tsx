@@ -194,35 +194,88 @@ export default function TelegramGroupsPage() {
 
   // فلترة نتائج البحث
   useEffect(() => {
+    if (searchResults.length === 0) {
+      setFilteredSearchResults([]);
+      return;
+    }
+
     let filtered = [...searchResults];
 
     // Filter by visible members
     if (searchFilterVisibleMembers === 'visible') {
-      filtered = filtered.filter(group => group.members_visible === true);
+      filtered = filtered.filter(group => {
+        // إذا كان الحقل موجود، استخدمه
+        if (group.members_visible !== undefined) {
+          return group.members_visible === true;
+        }
+        // إذا لم يكن موجود، نعتبره ظاهر (افتراضي)
+        return true;
+      });
     } else if (searchFilterVisibleMembers === 'hidden') {
-      filtered = filtered.filter(group => group.members_visible === false);
+      filtered = filtered.filter(group => {
+        // فقط إذا كان الحقل موجود و false
+        return group.members_visible === false;
+      });
     }
 
     // Filter by privacy
     if (searchFilterPrivacy === 'public') {
-      filtered = filtered.filter(group => group.is_private === false);
+      filtered = filtered.filter(group => {
+        if (group.is_private !== undefined) {
+          return group.is_private === false;
+        }
+        // إذا لم يكن موجود، نستخدم username كدليل
+        return group.username !== null && group.username !== '';
+      });
     } else if (searchFilterPrivacy === 'private') {
-      filtered = filtered.filter(group => group.is_private === true);
+      filtered = filtered.filter(group => {
+        if (group.is_private !== undefined) {
+          return group.is_private === true;
+        }
+        // إذا لم يكن موجود، نستخدم username كدليل
+        return !group.username || group.username === '';
+      });
     }
 
     // Filter by can send
     if (searchFilterCanSend === 'yes') {
-      filtered = filtered.filter(group => group.can_send === true);
+      filtered = filtered.filter(group => {
+        if (group.can_send !== undefined) {
+          return group.can_send === true;
+        }
+        // إذا لم يكن موجود، نعتبره يمكن الإرسال إذا لم يكن مغلق
+        return group.is_closed !== true;
+      });
     } else if (searchFilterCanSend === 'no') {
-      filtered = filtered.filter(group => group.can_send === false || group.is_closed === true);
+      filtered = filtered.filter(group => {
+        if (group.can_send !== undefined) {
+          return group.can_send === false;
+        }
+        // إذا لم يكن موجود، نعتبره مغلق إذا كان is_closed = true
+        return group.is_closed === true;
+      });
     }
 
     // Filter by restricted
     if (searchFilterRestricted === 'yes') {
       filtered = filtered.filter(group => group.is_restricted === true);
     } else if (searchFilterRestricted === 'no') {
-      filtered = filtered.filter(group => group.is_restricted === false);
+      filtered = filtered.filter(group => 
+        group.is_restricted === false || 
+        group.is_restricted === undefined
+      );
     }
+
+    console.log('🔍 Filtered search results:', {
+      total: searchResults.length,
+      filtered: filtered.length,
+      filters: {
+        visibleMembers: searchFilterVisibleMembers,
+        privacy: searchFilterPrivacy,
+        canSend: searchFilterCanSend,
+        restricted: searchFilterRestricted
+      }
+    });
 
     setFilteredSearchResults(filtered);
   }, [searchResults, searchFilterVisibleMembers, searchFilterPrivacy, searchFilterCanSend, searchFilterRestricted]);
