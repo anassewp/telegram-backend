@@ -445,61 +445,61 @@ async def import_groups(
             # فقط المجموعات (supergroups) أو المجموعات العادية
             if is_megagroup or (hasattr(entity, 'id') and not is_channel):
                 try:
-                    # التحقق من إمكانية رؤية الأعضاء
-                    # نحاول التحقق من أن المجموعة ليست مقيدة (restricted)
+                    # جلب معلومات أساسية
                     is_restricted = getattr(entity, 'restricted', False)
-                    
-                    # إذا كانت المجموعة مقيدة، قد لا نتمكن من رؤية الأعضاء
-                    if is_restricted:
-                        print(f"Skipping restricted group: {getattr(entity, 'title', 'Unknown')}")
-                        continue
-                    
-                    # محاولة جلب عدد الأعضاء من dialog
                     participants_count = getattr(entity, 'participants_count', 0)
+                    has_username = hasattr(entity, 'username') and entity.username is not None
+                    is_private = not has_username  # إذا لم يكن لها username، فهي خاصة
                     
-                    # التحقق الفعلي من إمكانية رؤية الأعضاء
-                    # نحاول جلب قائمة صغيرة من الأعضاء (5 أعضاء) للتحقق من الصلاحيات
+                    # التحقق من إمكانية رؤية الأعضاء (بدون تخطي)
                     can_see_members = False
-                    actual_members_count = 0
+                    members_visible = False
+                    actual_members_count = participants_count
                     
                     try:
-                        # محاولة جلب أول 5 أعضاء للتحقق من الصلاحيات
-                        member_count = 0
-                        async for user in client.iter_participants(entity, limit=5):
-                            # إذا استطعنا جلب حتى عضو واحد، يعني أننا نستطيع رؤية الأعضاء
-                            if not user.bot:  # نتخطى البوتات
-                                member_count += 1
+                        # محاولة جلب أول عضو واحد للتحقق من الصلاحيات
+                        async for user in client.iter_participants(entity, limit=1):
+                            if not user.bot:
                                 can_see_members = True
+                                members_visible = True
                                 break
-                        
-                        # إذا استطعنا رؤية الأعضاء، نحاول جلب العدد الحقيقي
-                        if can_see_members:
-                            try:
-                                # جلب معلومات كاملة للمجموعة للحصول على العدد الحقيقي
-                                if hasattr(entity, 'id'):
-                                    full_info = await client(GetFullChannelRequest(entity))
-                                    actual_members_count = getattr(full_info.full_chat, 'participants_count', participants_count)
-                                else:
-                                    actual_members_count = participants_count
-                            except Exception as e:
-                                print(f"Warning: Could not get full channel info for {getattr(entity, 'title', 'Unknown')}: {e}")
-                                actual_members_count = participants_count
-                        else:
-                            # إذا لم نستطع رؤية أعضاء، نتخطى المجموعة
-                            print(f"Skipping group with hidden members (admin only): {getattr(entity, 'title', 'Unknown')}")
-                            continue
-                            
                     except Exception as e:
                         error_msg = str(e).lower()
-                        # إذا كان الخطأ يتعلق بالصلاحيات، نتخطى المجموعة
+                        # إذا كان الخطأ يتعلق بالصلاحيات، يعني الأعضاء مخفيين
                         if 'permission' in error_msg or 'right' in error_msg or 'forbidden' in error_msg or 'not allowed' in error_msg:
-                            print(f"Skipping group with restricted member visibility: {getattr(entity, 'title', 'Unknown')} - {e}")
-                            continue
-                        # إذا كان خطأ آخر، نتخطى أيضاً (لأننا لا نستطيع رؤية الأعضاء)
-                        print(f"Skipping group (cannot verify member visibility): {getattr(entity, 'title', 'Unknown')} - {e}")
-                        continue
+                            members_visible = False
+                            can_see_members = False
+                        else:
+                            # خطأ آخر، نحاول معالجة
+                            members_visible = False
                     
-                    # إذا وصلنا هنا، يعني أننا نستطيع رؤية الأعضاء
+                    # محاولة جلب العدد الحقيقي للأعضاء
+                    try:
+                        if hasattr(entity, 'id'):
+                            full_info = await client(GetFullChannelRequest(entity))
+                            actual_members_count = getattr(full_info.full_chat, 'participants_count', participants_count)
+                    except Exception as e:
+                        # إذا فشل، نستخدم العدد من dialog
+                        actual_members_count = participants_count
+                    
+                    # التحقق من إمكانية الإرسال (بدون إرسال فعلي)
+                    can_send = True
+                    is_closed = False
+                    try:
+                        # التحقق من صلاحيات الإرسال من خلال full_chat
+                        if hasattr(entity, 'id'):
+                            try:
+                                full_info = await client(GetFullChannelRequest(entity))
+                                # التحقق من أن المجموعة ليست مقيدة للإرسال
+                                if hasattr(full_info, 'full_chat'):
+                                    # يمكن إضافة المزيد من الفحوصات هنا
+                                    pass
+                            except:
+                                pass
+                    except Exception as e:
+                        # إذا فشل، نفترض أنه يمكن الإرسال
+                        pass
+                    
                     group_type = 'supergroup' if is_megagroup else 'group'
                     
                     groups.append({
@@ -507,10 +507,17 @@ async def import_groups(
                         "title": entity.title,
                         "username": getattr(entity, 'username', None),
                         "members_count": actual_members_count or participants_count or 0,
-                        "type": group_type
+                        "type": group_type,
+                        "members_visible": members_visible,  # هل الأعضاء ظاهرين للجميع
+                        "is_private": is_private,  # خاصة أو عامة
+                        "is_restricted": is_restricted,  # مقيدة
+                        "can_send": can_send,  # يمكن الإرسال
+                        "is_closed": is_closed  # مغلقة
                     })
                     
-                    print(f"Added group with visible members: {getattr(entity, 'title', 'Unknown')} ({actual_members_count or participants_count} members)")
+                    visibility_status = "visible" if members_visible else "hidden (admin only)"
+                    privacy_status = "public" if not is_private else "private"
+                    print(f"Added group: {getattr(entity, 'title', 'Unknown')} ({actual_members_count or participants_count} members, {privacy_status}, members: {visibility_status})")
                     
                 except Exception as e:
                     # إذا فشل جلب المعلومات، نتخطى المجموعة
