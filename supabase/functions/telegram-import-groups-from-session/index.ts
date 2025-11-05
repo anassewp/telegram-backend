@@ -226,8 +226,8 @@ Deno.serve(async (req) => {
             }
 
             try {
-                // محاولة الإدراج
-                const insertResponse = await fetch(`${SUPABASE_URL}/rest/v1/telegram_groups`, {
+                // محاولة الإدراج مع جميع الحقول
+                let insertResponse = await fetch(`${SUPABASE_URL}/rest/v1/telegram_groups`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
@@ -238,27 +238,27 @@ Deno.serve(async (req) => {
                     body: JSON.stringify(groupRecord)
                 });
 
-                if (insertResponse.ok) {
-                    const inserted = await insertResponse.json();
-                    insertedGroups.push(inserted[0] || inserted);
-                    insertedCount++;
-                } else {
+                if (!insertResponse.ok) {
                     const errorText = await insertResponse.text();
                     console.error(`خطأ في إدراج مجموعة ${group.title}:`, {
                         status: insertResponse.status,
                         statusText: insertResponse.statusText,
-                        error: errorText,
-                        groupRecord: { ...groupRecord, user_id: '***', session_id: '***' }
+                        error: errorText.substring(0, 500)
                     });
                     
                     // إذا كان الخطأ بسبب التكرار (23505)، نتخطى المجموعة
                     if (errorText.includes('23505') || errorText.includes('duplicate key') || errorText.includes('already exists')) {
                         skippedCount++;
                         console.log(`تم تخطي المجموعة المكررة: ${group.title} (group_id: ${group.group_id})`);
-                    } else if (errorText.includes('column') && errorText.includes('does not exist')) {
-                        // إذا كان الخطأ بسبب حقل غير موجود، نحاول بدون الحقول الاختيارية
+                        continue;
+                    }
+                    
+                    // إذا كان الخطأ بسبب حقل غير موجود، نحاول بدون الحقول الاختيارية
+                    if (errorText.includes('column') && (errorText.includes('does not exist') || errorText.includes('not exist'))) {
                         console.warn(`حقل غير موجود في قاعدة البيانات، محاولة بدون الحقول الاختيارية: ${group.title}`);
-                        const minimalRecord = {
+                        
+                        // بناء سجل أدنى مع الحقول الأساسية فقط
+                        const minimalRecord: any = {
                             user_id: user_id,
                             session_id: session_id,
                             group_id: group.group_id,
@@ -269,7 +269,13 @@ Deno.serve(async (req) => {
                             is_active: true
                         };
                         
-                        const retryResponse = await fetch(`${SUPABASE_URL}/rest/v1/telegram_groups`, {
+                        // محاولة إضافة الحقول الأساسية فقط (إذا كانت موجودة)
+                        // نحاول إضافة members_visible فقط (لأنه موجود في migration 20250105)
+                        if (group.members_visible !== undefined) {
+                            minimalRecord.members_visible = group.members_visible;
+                        }
+                        
+                        insertResponse = await fetch(`${SUPABASE_URL}/rest/v1/telegram_groups`, {
                             method: 'POST',
                             headers: {
                                 'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
@@ -280,18 +286,30 @@ Deno.serve(async (req) => {
                             body: JSON.stringify(minimalRecord)
                         });
                         
-                        if (retryResponse.ok) {
-                            const inserted = await retryResponse.json();
-                            insertedGroups.push(inserted[0] || inserted);
-                            insertedCount++;
-                        } else {
-                            skippedCount++;
+                        if (!insertResponse.ok) {
+                            const retryErrorText = await insertResponse.text();
+                            console.error(`فشلت المحاولة الثانية لإدراج ${group.title}:`, retryErrorText.substring(0, 500));
+                            
+                            // إذا كان الخطأ تكرار، نتخطاه
+                            if (retryErrorText.includes('23505') || retryErrorText.includes('duplicate key')) {
+                                skippedCount++;
+                            } else {
+                                skippedCount++;
+                            }
+                            continue;
                         }
                     } else {
-                        // خطأ آخر، نتخطى المجموعة
+                        // خطأ آخر غير متوقع
                         skippedCount++;
+                        continue;
                     }
                 }
+
+                // إذا نجح الإدراج
+                const inserted = await insertResponse.json();
+                insertedGroups.push(inserted[0] || inserted);
+                insertedCount++;
+                
             } catch (error) {
                 console.error(`خطأ في إدراج مجموعة ${group.title}:`, error);
                 skippedCount++;
