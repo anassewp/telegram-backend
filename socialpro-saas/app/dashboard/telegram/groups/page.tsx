@@ -60,6 +60,11 @@ interface SearchResult {
   username: string | null;
   members_count: number;
   type: 'group' | 'supergroup' | 'channel';
+  members_visible?: boolean;  // هل الأعضاء ظاهرين للجميع
+  is_private?: boolean;  // خاصة أو عامة
+  is_restricted?: boolean;  // مقيدة
+  can_send?: boolean;  // يمكن الإرسال
+  is_closed?: boolean;  // مغلقة
 }
 
 // الكلمات المفتاحية الموسعة للبحث في تيليجرام
@@ -160,9 +165,10 @@ export default function TelegramGroupsPage() {
   
   // Search Results
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [filteredSearchResults, setFilteredSearchResults] = useState<SearchResult[]>([]);
   const [selectedSearchResults, setSelectedSearchResults] = useState<string[]>([]);
   
-  // Filters
+  // Filters for imported groups
   const [filterType, setFilterType] = useState<'all' | 'groups_only' | 'group' | 'supergroup' | 'channel'>('all');
   const [filterVisibleMembers, setFilterVisibleMembers] = useState<'all' | 'visible' | 'hidden'>('all');
   const [filterPrivacy, setFilterPrivacy] = useState<'all' | 'public' | 'private'>('all');
@@ -170,6 +176,13 @@ export default function TelegramGroupsPage() {
   const [filterRestricted, setFilterRestricted] = useState<'all' | 'yes' | 'no'>('all');
   const [showFilters, setShowFilters] = useState(false);
   const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
+  
+  // Filters for search results
+  const [searchFilterVisibleMembers, setSearchFilterVisibleMembers] = useState<'all' | 'visible' | 'hidden'>('all');
+  const [searchFilterPrivacy, setSearchFilterPrivacy] = useState<'all' | 'public' | 'private'>('all');
+  const [searchFilterCanSend, setSearchFilterCanSend] = useState<'all' | 'yes' | 'no'>('all');
+  const [searchFilterRestricted, setSearchFilterRestricted] = useState<'all' | 'yes' | 'no'>('all');
+  const [showSearchFilters, setShowSearchFilters] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -369,10 +382,17 @@ export default function TelegramGroupsPage() {
           username: group.username || null,
           members_count: group.members_count || 0,
           type: group.type === 'channel' ? 'channel' : 
-                group.type === 'supergroup' ? 'supergroup' : 'group'
+                group.type === 'supergroup' ? 'supergroup' : 'group',
+          // الحقول الجديدة للفلترة
+          members_visible: group.members_visible !== undefined ? group.members_visible : true,
+          is_private: group.is_private !== undefined ? group.is_private : false,
+          is_restricted: group.is_restricted !== undefined ? group.is_restricted : false,
+          can_send: group.can_send !== undefined ? group.can_send : true,
+          is_closed: group.is_closed !== undefined ? group.is_closed : false
         }));
 
         setSearchResults(realResults);
+        setFilteredSearchResults(realResults);
         setSelectedSearchResults([]);
         setShowSearchModal(false);
         setShowSearchResults(true);
@@ -549,10 +569,10 @@ export default function TelegramGroupsPage() {
   };
 
   const toggleSelectAllSearchResults = () => {
-    if (selectedSearchResults.length === searchResults.length) {
+    if (selectedSearchResults.length === filteredSearchResults.length) {
       setSelectedSearchResults([]);
     } else {
-      setSelectedSearchResults(searchResults.map(r => r.id));
+      setSelectedSearchResults(filteredSearchResults.map(r => r.id));
     }
   };
 
@@ -1239,26 +1259,119 @@ export default function TelegramGroupsPage() {
               </button>
             </div>
 
+            {/* Filters for Search Results */}
+            <div className="bg-neutral-50 rounded-xl p-4 mb-6 border border-neutral-200">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Filter className="w-5 h-5 text-neutral-600" />
+                  <h4 className="font-bold text-neutral-900">فلترة النتائج</h4>
+                </div>
+                <button
+                  onClick={() => setShowSearchFilters(!showSearchFilters)}
+                  className="text-sm text-primary-600 hover:text-primary-700 font-medium flex items-center gap-2"
+                >
+                  <ChevronDown className={`w-4 h-4 transition-transform ${showSearchFilters ? 'rotate-180' : ''}`} />
+                  {showSearchFilters ? 'إخفاء الفلاتر' : 'إظهار الفلاتر'}
+                </button>
+              </div>
+
+              {showSearchFilters && (
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  {/* Visible Members Filter */}
+                  <div>
+                    <label className="block text-sm font-medium text-neutral-700 mb-2">ظهور الأعضاء</label>
+                    <select
+                      value={searchFilterVisibleMembers}
+                      onChange={(e) => setSearchFilterVisibleMembers(e.target.value as any)}
+                      className="w-full px-3 py-2 text-sm border border-neutral-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    >
+                      <option value="all">الكل</option>
+                      <option value="visible">أعضاء ظاهرين</option>
+                      <option value="hidden">أعضاء مخفيين</option>
+                    </select>
+                  </div>
+
+                  {/* Privacy Filter */}
+                  <div>
+                    <label className="block text-sm font-medium text-neutral-700 mb-2">خاصة/عامة</label>
+                    <select
+                      value={searchFilterPrivacy}
+                      onChange={(e) => setSearchFilterPrivacy(e.target.value as any)}
+                      className="w-full px-3 py-2 text-sm border border-neutral-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    >
+                      <option value="all">الكل</option>
+                      <option value="public">عامة</option>
+                      <option value="private">خاصة</option>
+                    </select>
+                  </div>
+
+                  {/* Can Send Filter */}
+                  <div>
+                    <label className="block text-sm font-medium text-neutral-700 mb-2">يمكن الإرسال</label>
+                    <select
+                      value={searchFilterCanSend}
+                      onChange={(e) => setSearchFilterCanSend(e.target.value as any)}
+                      className="w-full px-3 py-2 text-sm border border-neutral-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    >
+                      <option value="all">الكل</option>
+                      <option value="yes">يمكن الإرسال</option>
+                      <option value="no">مغلقة</option>
+                    </select>
+                  </div>
+
+                  {/* Restricted Filter */}
+                  <div>
+                    <label className="block text-sm font-medium text-neutral-700 mb-2">مقيدة</label>
+                    <select
+                      value={searchFilterRestricted}
+                      onChange={(e) => setSearchFilterRestricted(e.target.value as any)}
+                      className="w-full px-3 py-2 text-sm border border-neutral-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    >
+                      <option value="all">الكل</option>
+                      <option value="no">غير مقيدة</option>
+                      <option value="yes">مقيدة</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Select All */}
             <div className="flex items-center justify-between mb-4 pb-4 border-b border-neutral-200">
               <button
-                onClick={toggleSelectAllSearchResults}
+                onClick={() => {
+                  if (selectedSearchResults.length === filteredSearchResults.length) {
+                    setSelectedSearchResults([]);
+                  } else {
+                    setSelectedSearchResults(filteredSearchResults.map(r => r.id));
+                  }
+                }}
                 className="text-sm text-primary-600 hover:text-primary-700 font-medium flex items-center gap-2"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                {selectedSearchResults.length === searchResults.length ? 'إلغاء تحديد الكل' : 'تحديد الكل'}
+                {selectedSearchResults.length === filteredSearchResults.length ? 'إلغاء تحديد الكل' : 'تحديد الكل'}
               </button>
               
-              {selectedSearchResults.length > 0 && (
-                <span className="text-sm text-neutral-600 font-medium">
-                  {selectedSearchResults.length} محدد
+              <div className="flex items-center gap-4 text-sm text-neutral-600">
+                <span className="font-medium">
+                  {filteredSearchResults.length} من {searchResults.length} نتيجة
                 </span>
-              )}
+                {selectedSearchResults.length > 0 && (
+                  <span className="text-primary-600 font-medium">
+                    {selectedSearchResults.length} محدد
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* Results List */}
             <div className="space-y-3 max-h-96 overflow-y-auto mb-6">
-              {searchResults.map((result) => (
+              {filteredSearchResults.length === 0 ? (
+                <div className="text-center py-8 text-neutral-500">
+                  لا توجد نتائج تطابق الفلاتر المحددة
+                </div>
+              ) : (
+                filteredSearchResults.map((result) => (
                 <div
                   key={result.id}
                   className={`p-4 rounded-xl border-2 transition-all cursor-pointer ${
@@ -1293,7 +1406,7 @@ export default function TelegramGroupsPage() {
                         </span>
                       </div>
                       
-                      <div className="flex items-center gap-4 text-sm text-neutral-600">
+                      <div className="flex items-center gap-4 text-sm text-neutral-600 flex-wrap">
                         {result.username && (
                           <span className="text-primary-600">@{result.username}</span>
                         )}
@@ -1301,11 +1414,35 @@ export default function TelegramGroupsPage() {
                           <Users className="w-4 h-4" />
                           <span className="font-medium">{result.members_count.toLocaleString()} عضو</span>
                         </div>
+                        {result.members_visible !== undefined && (
+                          <span className={`px-2 py-1 rounded text-xs ${
+                            result.members_visible 
+                              ? 'bg-green-100 text-green-700' 
+                              : 'bg-orange-100 text-orange-700'
+                          }`}>
+                            {result.members_visible ? 'أعضاء ظاهرين' : 'أعضاء مخفيين'}
+                          </span>
+                        )}
+                        {result.is_private !== undefined && (
+                          <span className={`px-2 py-1 rounded text-xs ${
+                            result.is_private 
+                              ? 'bg-purple-100 text-purple-700' 
+                              : 'bg-blue-100 text-blue-700'
+                          }`}>
+                            {result.is_private ? 'خاصة' : 'عامة'}
+                          </span>
+                        )}
+                        {result.can_send !== undefined && !result.can_send && (
+                          <span className="px-2 py-1 rounded text-xs bg-red-100 text-red-700">
+                            مغلقة
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
                 </div>
-              ))}
+              ))
+              )}
             </div>
 
             {/* Actions */}
