@@ -1045,15 +1045,12 @@ async def search_groups(request: SearchGroupsRequest):
                     # الحصول على معلومات المجموعة
                     entity = await client.get_entity(peer)
                     
-                    # فلترة: فقط المجموعات العامة (التي لها username)
+                    # معلومات أساسية (بدون تخطي)
                     has_username = hasattr(entity, 'username') and entity.username
+                    is_private = not has_username  # إذا لم يكن لها username، فهي خاصة
+                    is_restricted = getattr(entity, 'restricted', False)
                     
-                    # إذا لم يكن لها username، نتخطاها (نريد فقط المجموعات العامة للبحث العالمي)
-                    if not has_username:
-                        skipped_no_username += 1
-                        continue
-                    
-                    # إذا كانت المجموعة من مجموعات المستخدم، نتخطاها
+                    # إذا كانت المجموعة من مجموعات المستخدم، نتخطاها (لأنها موجودة بالفعل)
                     if entity.id in user_group_ids:
                         skipped_user_group += 1
                         continue  # تخطي المجموعات التي المستخدم عضو فيها
@@ -1065,7 +1062,6 @@ async def search_groups(request: SearchGroupsRequest):
                             continue  # تخطي القنوات، فقط المجموعات
                     
                     # الحصول على عدد الأعضاء الحقيقي
-                    # ملاحظة: GetFullChannelRequest قد يكون بطيئاً، لذلك نستخدمه فقط إذا كان متوفراً
                     members_count = 0
                     try:
                         # محاولة سريعة من entity أولاً
@@ -1087,6 +1083,25 @@ async def search_groups(request: SearchGroupsRequest):
                         # إذا فشل كل شيء، نستخدم 0
                         members_count = 0
                     
+                    # التحقق من إمكانية رؤية الأعضاء (بدون تخطي)
+                    members_visible = False
+                    can_send = True
+                    is_closed = False
+                    
+                    try:
+                        # محاولة جلب أول عضو واحد للتحقق من الصلاحيات
+                        async for user in client.iter_participants(entity, limit=1):
+                            if not user.bot:
+                                members_visible = True
+                                break
+                    except Exception as e:
+                        error_msg = str(e).lower()
+                        # إذا كان الخطأ يتعلق بالصلاحيات، يعني الأعضاء مخفيين
+                        if 'permission' in error_msg or 'right' in error_msg or 'forbidden' in error_msg or 'not allowed' in error_msg:
+                            members_visible = False
+                        else:
+                            members_visible = False
+                    
                     seen_ids.add(group_id)
                     
                     group_info = {
@@ -1097,9 +1112,15 @@ async def search_groups(request: SearchGroupsRequest):
                         "type": "channel" if getattr(entity, 'broadcast', False) else "supergroup",
                         "members_count": members_count,
                         "description": getattr(entity, 'about', None),
-                        "is_public": True,  # إذا كان له username فهو عام
+                        "is_public": not is_private,  # عامة إذا كان لها username
                         "verified": getattr(entity, 'verified', False),
-                        "invite_link": f"https://t.me/{entity.username}" if entity.username else None
+                        "invite_link": f"https://t.me/{entity.username}" if entity.username else None,
+                        # الحقول الجديدة للفلترة
+                        "members_visible": members_visible,
+                        "is_private": is_private,
+                        "is_restricted": is_restricted,
+                        "can_send": can_send,
+                        "is_closed": is_closed
                     }
                     
                     groups.append(group_info)
