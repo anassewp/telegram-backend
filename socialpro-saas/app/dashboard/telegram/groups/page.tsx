@@ -57,6 +57,7 @@ interface TelegramSession {
 
 interface SearchResult {
   id: string;
+  group_id?: number;  // معرف المجموعة الأصلي من Telegram (مطلوب للاستيراد)
   title: string;
   username: string | null;
   members_count: number;
@@ -577,20 +578,39 @@ export default function TelegramGroupsPage() {
 
       if (data?.data?.groups && Array.isArray(data.data.groups)) {
         // تحويل البيانات من الـ API إلى التنسيق المتوقع
-        const realResults: SearchResult[] = data.data.groups.map((group: any) => ({
-          id: String(group.id || group.group_id || Math.random().toString(36).substr(2, 9)),
-          title: group.title || 'Unknown',
-          username: group.username || null,
-          members_count: group.members_count || 0,
-          type: group.type === 'channel' ? 'channel' : 
-                group.type === 'supergroup' ? 'supergroup' : 'group',
-          // الحقول الجديدة للفلترة
-          members_visible: group.members_visible !== undefined ? group.members_visible : true,
-          is_private: group.is_private !== undefined ? group.is_private : false,
-          is_restricted: group.is_restricted !== undefined ? group.is_restricted : false,
-          can_send: group.can_send !== undefined ? group.can_send : true,
-          is_closed: group.is_closed !== undefined ? group.is_closed : false
-        }));
+        const realResults: SearchResult[] = data.data.groups.map((group: any) => {
+          // الحصول على group_id الأصلي من Backend (مهم للاستيراد)
+          // Backend يرسل group_id كـ number و id كـ string
+          const originalGroupId = group.group_id || group.id;
+          
+          // تحويل group_id إلى number
+          let groupIdNumber: number | undefined;
+          if (typeof originalGroupId === 'number') {
+            groupIdNumber = originalGroupId;
+          } else if (typeof originalGroupId === 'string') {
+            const parsed = parseInt(originalGroupId);
+            groupIdNumber = isNaN(parsed) ? undefined : parsed;
+          }
+          
+          // إنشاء id فريد للواجهة (string) - للاستخدام في UI فقط
+          const displayId = String(group.id || group.group_id || groupIdNumber || Math.random().toString(36).substr(2, 9));
+          
+          return {
+            id: displayId,
+            group_id: groupIdNumber,  // معرف المجموعة الأصلي من Telegram (number)
+            title: group.title || 'Unknown',
+            username: group.username || null,
+            members_count: group.members_count || 0,
+            type: group.type === 'channel' ? 'channel' : 
+                  group.type === 'supergroup' ? 'supergroup' : 'group',
+            // الحقول الجديدة للفلترة
+            members_visible: group.members_visible !== undefined ? group.members_visible : true,
+            is_private: group.is_private !== undefined ? group.is_private : false,
+            is_restricted: group.is_restricted !== undefined ? group.is_restricted : false,
+            can_send: group.can_send !== undefined ? group.can_send : true,
+            is_closed: group.is_closed !== undefined ? group.is_closed : false
+          };
+        });
 
         setSearchResults(realResults);
         setFilteredSearchResults(realResults);
@@ -637,21 +657,28 @@ export default function TelegramGroupsPage() {
       }
 
       // تحضير البيانات للاستيراد
-      const groupsToImport = selectedGroups.map(group => ({
-        id: group.id,
-        title: group.title,
-        username: group.username,
-        type: group.type,
-        description: `مجموعة مستوردة من البحث: ${group.title}`,
-        members_count: group.members_count,
-        photo_url: group.username ? `https://t.me/${group.username}` : '',
-        is_public: true,
-        verified: false,
-        invite_link: group.username ? `https://t.me/${group.username}` : '',
-        language: 'ar', // اللغة الافتراضية
-        region: 'Arab',
-        category: 'Imported'
-      }));
+      const groupsToImport = selectedGroups.map(group => {
+        // التحقق من وجود group_id (مطلوب للاستيراد)
+        if (!group.group_id) {
+          console.warn(`Group ${group.title} missing group_id, skipping. id: ${group.id}, group_id: ${group.group_id}`);
+          return null;
+        }
+        
+        return {
+          id: group.id,  // للتوافق
+          group_id: group.group_id,  // معرف المجموعة الأصلي من Telegram (number - مطلوب)
+          title: group.title,
+          username: group.username,
+          type: group.type,
+          members_count: group.members_count || 0
+        };
+      }).filter(g => g !== null);  // إزالة المجموعات بدون group_id
+
+      if (groupsToImport.length === 0) {
+        throw new Error('لا توجد مجموعات صالحة للاستيراد (جميع المجموعات تفتقد group_id)');
+      }
+
+      console.log(`Preparing to import ${groupsToImport.length} groups with group_ids:`, groupsToImport.map(g => ({ title: g.title, group_id: g.group_id })));
 
       // استيراد المجموعات باستخدام Edge Function
       const { data, error } = await supabase.functions.invoke('telegram-import-groups', {
@@ -663,7 +690,27 @@ export default function TelegramGroupsPage() {
 
       if (error) {
         console.error('خطأ في الاستيراد:', error);
-        throw new Error(`فشل في الاستيراد: ${error.message}`);
+        // محاولة استخراج رسالة الخطأ من response
+        let errorMessage = error.message || 'حدث خطأ غير معروف';
+        if (error.context && error.context.body) {
+          try {
+            const errorBody = typeof error.context.body === 'string' 
+              ? JSON.parse(error.context.body) 
+              : error.context.body;
+            if (errorBody.error && errorBody.error.message) {
+              errorMessage = errorBody.error.message;
+            }
+          } catch (e) {
+            // تجاهل خطأ parsing
+          }
+        }
+        throw new Error(`فشل في الاستيراد: ${errorMessage}`);
+      }
+
+      // التحقق من وجود خطأ في response
+      if (data?.error) {
+        console.error('خطأ من Edge Function:', data.error);
+        throw new Error(data.error.message || 'حدث خطأ في الاستيراد');
       }
 
       if (data?.data) {
@@ -684,7 +731,9 @@ export default function TelegramGroupsPage() {
       }
     } catch (err: any) {
       console.error('خطأ في الاستيراد:', err);
-      setError(err.message || 'حدث خطأ أثناء الاستيراد');
+      const errorMessage = err.message || 'حدث خطأ أثناء الاستيراد';
+      setError(errorMessage);
+      alert(`خطأ في الاستيراد: ${errorMessage}`);
     } finally {
       setImporting(false);
     }
