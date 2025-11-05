@@ -474,33 +474,24 @@ async def import_groups(
                         
                         # تحديد نوع ظهور الأعضاء بناءً على عدد الأعضاء الظاهرين
                         # المعايير الجديدة:
-                        # - 1-2 عضو ظاهر → hidden (مخفيين)
-                        # - 5-19 عضو ظاهر → admin_only (للإدمن فقط)
-                        # - 20-30+ عضو ظاهر → fully_visible (ظاهرين بالكامل)
+                        # - 0 عضو ظاهر → hidden (مخفيين)
+                        # - 1-10 عضو ظاهر → admin_only (للإدمن فقط)
+                        # - 11+ عضو ظاهر → fully_visible (ظاهرين بالكامل)
                         if visible_participants_count == 0:
+                            # 0 عضو ظاهر → مخفيين
                             members_visibility_type = 'hidden'
                             members_visible = False
                             can_see_members = False
-                        elif 1 <= visible_participants_count <= 2:
-                            # 1-2 عضو ظاهر → مخفيين
-                            members_visibility_type = 'hidden'
-                            members_visible = False
-                            can_see_members = False
-                        elif 5 <= visible_participants_count <= 19:
-                            # 5-19 عضو ظاهر → للإدمن فقط
+                        elif 1 <= visible_participants_count <= 10:
+                            # 1-10 عضو ظاهر → للإدمن فقط
                             members_visibility_type = 'admin_only'
                             members_visible = True
                             can_see_members = True
-                        elif visible_participants_count >= 20:
-                            # 20-30+ عضو ظاهر → ظاهرين بالكامل
+                        elif visible_participants_count > 10:
+                            # 11+ عضو ظاهر → ظاهرين بالكامل
                             members_visibility_type = 'fully_visible'
                             members_visible = True
                             can_see_members = True
-                        else:
-                            # 3-4 أعضاء (حالة وسطى) → مخفيين
-                            members_visibility_type = 'hidden'
-                            members_visible = False
-                            can_see_members = False
                         
                     except Exception as e:
                         error_msg = str(e).lower()
@@ -1121,29 +1112,21 @@ async def search_groups(request: SearchGroupsRequest):
                         
                         # تحديد نوع ظهور الأعضاء بناءً على عدد الأعضاء الظاهرين
                         # المعايير الجديدة:
-                        # - 1-2 عضو ظاهر → hidden (مخفيين)
-                        # - 5-19 عضو ظاهر → admin_only (للإدمن فقط)
-                        # - 20-30+ عضو ظاهر → fully_visible (ظاهرين بالكامل)
+                        # - 0 عضو ظاهر → hidden (مخفيين)
+                        # - 1-10 عضو ظاهر → admin_only (للإدمن فقط)
+                        # - 11+ عضو ظاهر → fully_visible (ظاهرين بالكامل)
                         if visible_participants_count == 0:
-                            # لم نستطع جلب أي عضو
+                            # 0 عضو ظاهر → مخفيين
                             members_visibility_type = 'hidden'
                             members_visible = False
-                        elif 1 <= visible_participants_count <= 2:
-                            # 1-2 عضو ظاهر → مخفيين
-                            members_visibility_type = 'hidden'
-                            members_visible = False
-                        elif 5 <= visible_participants_count <= 19:
-                            # 5-19 عضو ظاهر → للإدمن فقط
+                        elif 1 <= visible_participants_count <= 10:
+                            # 1-10 عضو ظاهر → للإدمن فقط
                             members_visibility_type = 'admin_only'
                             members_visible = True
-                        elif visible_participants_count >= 20:
-                            # 20-30+ عضو ظاهر → ظاهرين بالكامل
+                        elif visible_participants_count > 10:
+                            # 11+ عضو ظاهر → ظاهرين بالكامل
                             members_visibility_type = 'fully_visible'
                             members_visible = True
-                        else:
-                            # 3-4 أعضاء (حالة وسطى) → مخفيين
-                            members_visibility_type = 'hidden'
-                            members_visible = False
                         
                         print(f"Group: {getattr(entity, 'title', 'Unknown')}, Members: {members_count}, Visible: {visible_participants_count}, Type: {members_visibility_type}")
                         
