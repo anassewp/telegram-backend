@@ -349,27 +349,60 @@ Deno.serve(async (req) => {
                 }
             }
             
-            console.log('Processed selectedMembers:', selectedMembers);
+            console.log('========== معالجة الأعضاء ==========');
+            console.log('selected_members type:', typeof campaign.selected_members);
+            console.log('selected_members raw:', campaign.selected_members);
+            console.log('Processed selectedMembers:', JSON.stringify(selectedMembers, null, 2));
+            console.log('selectedMembers length:', selectedMembers.length);
             
             if (selectedMembers.length > 0) {
                 // فصل IDs و usernames
                 const memberIds: number[] = [];
                 const memberUsernames: string[] = [];
                 
-                selectedMembers.forEach((item: any) => {
+                selectedMembers.forEach((item: any, index: number) => {
+                    console.log(`Processing member item ${index}:`, {
+                        type: typeof item,
+                        value: item,
+                        isNumber: typeof item === 'number',
+                        isObject: typeof item === 'object',
+                        isString: typeof item === 'string'
+                    });
+                    
                     if (typeof item === 'number') {
                         memberIds.push(item);
-                    } else if (typeof item === 'object' && item.username) {
-                        memberUsernames.push(item.username);
-                    } else if (typeof item === 'string' && !item.match(/^\d+$/)) {
-                        memberUsernames.push(item.replace('@', ''));
+                        console.log(`  → Added as ID: ${item}`);
+                    } else if (typeof item === 'object' && item !== null) {
+                        if (item.username) {
+                            memberUsernames.push(item.username);
+                            console.log(`  → Added as username: ${item.username}`);
+                        } else if (item.telegram_user_id) {
+                            memberIds.push(item.telegram_user_id);
+                            console.log(`  → Added as telegram_user_id: ${item.telegram_user_id}`);
+                        } else {
+                            console.warn(`  ⚠️ Unknown object structure:`, item);
+                        }
                     } else if (typeof item === 'string') {
-                        memberIds.push(Number(item));
+                        if (item.match(/^\d+$/)) {
+                            const numId = Number(item);
+                            memberIds.push(numId);
+                            console.log(`  → Added as string ID: ${numId}`);
+                        } else {
+                            memberUsernames.push(item.replace('@', ''));
+                            console.log(`  → Added as string username: ${item.replace('@', '')}`);
+                        }
+                    } else {
+                        console.warn(`  ⚠️ Unknown item type:`, typeof item, item);
                     }
                 });
 
+                console.log(`Extracted: ${memberIds.length} IDs, ${memberUsernames.length} usernames`);
+                console.log('Member IDs:', memberIds);
+                console.log('Member Usernames:', memberUsernames);
+
                 // جلب الأعضاء من قاعدة البيانات (IDs فقط)
                 if (memberIds.length > 0) {
+                    console.log(`جلب ${memberIds.length} عضو من قاعدة البيانات...`);
                     const membersResponse = await fetch(
                         `${SUPABASE_URL}/rest/v1/telegram_members?telegram_user_id=in.(${memberIds.join(',')})&user_id=eq.${user_id}`,
                         {
@@ -381,10 +414,15 @@ Deno.serve(async (req) => {
                         }
                     );
 
-                    if (membersResponse.ok) {
+                    if (!membersResponse.ok) {
+                        const errorText = await membersResponse.text();
+                        console.error(`✗ فشل في جلب الأعضاء: ${membersResponse.status} - ${errorText}`);
+                    } else {
                         let members = await membersResponse.json();
+                        console.log(`✓ تم جلب ${members.length} عضو من قاعدة البيانات`);
                         
                         // Apply filters
+                        const beforeFilter = members.length;
                         members = members.filter((m: any) => {
                             if (campaign.exclude_bots && m.is_bot) return false;
                             if (campaign.exclude_premium && m.is_premium) return false;
@@ -394,28 +432,49 @@ Deno.serve(async (req) => {
                             if (sentMemberIds.includes(m.telegram_user_id)) return false;
                             return true;
                         });
+                        
+                        console.log(`✓ بعد الفلترة: ${members.length} عضو (تم استبعاد ${beforeFilter - members.length})`);
 
-                        targets.push(...members.map((m: any) => ({ type: 'member', id: m.telegram_user_id, data: m })));
+                        targets.push(...members.map((m: any) => ({ 
+                            type: 'member', 
+                            id: m.telegram_user_id, 
+                            data: m 
+                        })));
                     }
                 }
 
                 // إضافة usernames مباشرة (سيتم حلها في Backend)
-                memberUsernames.forEach((username: string) => {
-                    targets.push({ 
-                        type: 'member', 
-                        id: null, 
-                        username: username,
-                        data: { username: username } 
+                if (memberUsernames.length > 0) {
+                    console.log(`إضافة ${memberUsernames.length} username مباشرة...`);
+                    memberUsernames.forEach((username: string) => {
+                        targets.push({ 
+                            type: 'member', 
+                            id: null, 
+                            username: username,
+                            data: { username: username } 
+                        });
                     });
-                });
+                }
+                
+                console.log('=========================================');
+            } else {
+                console.warn('⚠️ لا توجد أعضاء محددة في selected_members');
             }
         }
 
+        console.log('========== ملخص الأهداف ==========');
         console.log('Targets prepared:', {
             total: targets.length,
             groups: targets.filter(t => t.type === 'group').length,
             members: targets.filter(t => t.type === 'member').length
         });
+        console.log('Targets details:', targets.map(t => ({
+            type: t.type,
+            id: t.id,
+            username: t.username,
+            hasData: !!t.data
+        })));
+        console.log('===================================');
         
         if (targets.length === 0) {
             // إذا لم توجد أهداف، قد تكون جميعها تم إرسالها
@@ -471,11 +530,28 @@ Deno.serve(async (req) => {
         const errors: any[] = [];
 
         // Process each session
+        console.log('========== بدء إرسال الرسائل ==========');
+        console.log(`عدد الجلسات: ${sessions.length}`);
+        console.log(`إجمالي الأهداف الموزعة: ${limitedTargets.length}`);
+        
         for (const session of sessions) {
             const sessionTargets = distributed[session.id] || [];
-            if (sessionTargets.length === 0) continue;
+            console.log(`\n📤 جلسة: ${session.session_name} (${session.id})`);
+            console.log(`   عدد الأهداف: ${sessionTargets.length}`);
+            
+            if (sessionTargets.length === 0) {
+                console.log('   ⏭️ لا توجد أهداف لهذه الجلسة، تخطي...');
+                continue;
+            }
 
-            for (const target of sessionTargets) {
+            for (let i = 0; i < sessionTargets.length; i++) {
+                const target = sessionTargets[i];
+                console.log(`\n   📨 إرسال ${i + 1}/${sessionTargets.length}:`, {
+                    type: target.type,
+                    id: target.id,
+                    username: target.username
+                });
+                
                 try {
                     let messageText = campaign.message_text;
                     
@@ -502,17 +578,21 @@ Deno.serve(async (req) => {
                         
                         if (target.id) {
                             requestBody.group_id = target.id;
+                            console.log(`      → إرسال إلى مجموعة (ID: ${target.id})`);
                         } else if (target.username) {
                             requestBody.username = target.username;
+                            console.log(`      → إرسال إلى مجموعة (username: ${target.username})`);
                         } else {
                             throw new Error('لا يوجد group_id أو username للمجموعة');
                         }
                         
+                        console.log(`      📡 استدعاء Backend: ${TELEGRAM_BACKEND_URL}/messages/send`);
                         sendResponse = await fetch(`${TELEGRAM_BACKEND_URL}/messages/send`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(requestBody)
                         });
+                        console.log(`      📥 استجابة Backend: ${sendResponse.status} ${sendResponse.statusText}`);
                     } else if (target.type === 'member') {
                         // دعم usernames و IDs
                         const requestBody: any = {
@@ -525,18 +605,23 @@ Deno.serve(async (req) => {
                         
                         if (target.id) {
                             requestBody.member_telegram_id = target.id;
+                            console.log(`      → إرسال إلى عضو (ID: ${target.id})`);
                         } else if (target.username) {
                             requestBody.username = target.username;
+                            console.log(`      → إرسال إلى عضو (username: ${target.username})`);
                         } else {
                             throw new Error('لا يوجد member_telegram_id أو username للعضو');
                         }
                         
+                        console.log(`      📡 استدعاء Backend: ${TELEGRAM_BACKEND_URL}/messages/send-to-member`);
                         sendResponse = await fetch(`${TELEGRAM_BACKEND_URL}/messages/send-to-member`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(requestBody)
                         });
+                        console.log(`      📥 استجابة Backend: ${sendResponse.status} ${sendResponse.statusText}`);
                     } else {
+                        console.warn(`      ⚠️ نوع هدف غير معروف: ${target.type}`);
                         continue;
                     }
 
@@ -559,8 +644,14 @@ Deno.serve(async (req) => {
                     }
 
                     const sendResult = await sendResponse.json();
+                    console.log(`      📊 نتيجة الإرسال:`, {
+                        success: sendResult.success,
+                        message_id: sendResult.message_id,
+                        message: sendResult.message
+                    });
 
                     if (sendResult.success) {
+                        console.log(`      ✅ تم إرسال الرسالة بنجاح`);
                         // Save to telegram_campaign_messages
                         const messageRecord: any = {
                             campaign_id: campaign_id,
@@ -636,6 +727,7 @@ Deno.serve(async (req) => {
                         campaign.delay_variation !== false
                     );
                     
+                    console.log(`      ⏳ انتظار ${delay} ثانية قبل الرسالة التالية...`);
                     // Wait (convert to milliseconds)
                     await new Promise(resolve => setTimeout(resolve, delay * 1000));
 

@@ -458,6 +458,7 @@ export default function CampaignsPage() {
 
   const handleStartCampaign = async (campaignId: string) => {
     try {
+      console.log(`🚀 بدء الحملة: ${campaignId}`)
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error('المستخدم غير مسجل الدخول')
 
@@ -468,12 +469,36 @@ export default function CampaignsPage() {
         }
       })
 
-      if (error) throw error
-      if (data?.error) throw new Error(data.error.message)
+      console.log('📥 استجابة من telegram-campaign-start:', { data, error })
 
+      if (error) {
+        console.error('❌ خطأ من supabase.functions.invoke:', error)
+        throw error
+      }
+      
+      if (data?.error) {
+        console.error('❌ خطأ من Edge Function:', data.error)
+        throw new Error(data.error.message || 'فشل في بدء الحملة')
+      }
+
+      if (!data?.success) {
+        console.error('❌ استجابة غير ناجحة:', data)
+        throw new Error('فشل في بدء الحملة - استجابة غير ناجحة')
+      }
+
+      console.log('✅ تم بدء الحملة بنجاح')
       setSuccess('تم بدء الحملة بنجاح')
-      fetchData()
+      
+      // تحديث البيانات ثم إرسال دفعة فوراً بعد بدء الحملة
+      await fetchData()
+      
+      // إرسال دفعة فوراً بعد بدء الحملة (بدون انتظار 30 ثانية)
+      setTimeout(() => {
+        console.log('🚀 إرسال دفعة فورية بعد بدء الحملة')
+        handleSendBatch(campaignId, true)
+      }, 2000) // بعد ثانيتين من تحديث البيانات
     } catch (err: any) {
+      console.error('❌ خطأ في handleStartCampaign:', err)
       setError(err.message || 'فشل في بدء الحملة')
     }
   }
@@ -562,8 +587,12 @@ export default function CampaignsPage() {
   }
 
   const handleSendBatch = async (campaignId: string, silent: boolean = false) => {
-    if (sendingBatch) return // منع إرسال متعدد
+    if (sendingBatch) {
+      console.log('⏸️ إرسال دفعة قيد التنفيذ بالفعل، تخطي...')
+      return // منع إرسال متعدد
+    }
 
+    console.log(`🚀 بدء إرسال دفعة للحملة: ${campaignId} (silent: ${silent})`)
     setSendingBatch(campaignId)
     if (!silent) {
       setError('')
@@ -572,7 +601,15 @@ export default function CampaignsPage() {
 
     try {
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) throw new Error('المستخدم غير مسجل الدخول')
+      if (!user) {
+        throw new Error('المستخدم غير مسجل الدخول')
+      }
+
+      console.log('📤 استدعاء telegram-campaign-send-batch...', {
+        campaign_id: campaignId,
+        user_id: user.id,
+        batch_size: 10
+      })
 
       const { data, error } = await supabase.functions.invoke('telegram-campaign-send-batch', {
         body: {
@@ -582,12 +619,42 @@ export default function CampaignsPage() {
         }
       })
 
-      if (error) throw error
-      if (data?.error) throw new Error(data.error.message)
+      console.log('📥 استجابة من telegram-campaign-send-batch:', {
+        hasData: !!data,
+        hasError: !!error,
+        data: data ? {
+          success: data.success,
+          sent: data.data?.sent,
+          failed: data.data?.failed,
+          error: data.error
+        } : null,
+        error: error ? {
+          message: error.message,
+          context: error.context
+        } : null
+      })
+
+      if (error) {
+        console.error('❌ خطأ من supabase.functions.invoke:', error)
+        throw error
+      }
+      
+      if (data?.error) {
+        console.error('❌ خطأ من Edge Function:', data.error)
+        throw new Error(data.error.message || 'فشل في إرسال الدفعة')
+      }
+
+      if (!data?.success) {
+        console.error('❌ استجابة غير ناجحة:', data)
+        throw new Error('فشل في إرسال الدفعة - استجابة غير ناجحة')
+      }
+
+      const sent = data.data?.sent || 0
+      const failed = data.data?.failed || 0
+      
+      console.log(`✅ تم إرسال الدفعة بنجاح: ${sent} نجح، ${failed} فشل`)
 
       if (!silent) {
-        const sent = data.data?.sent || 0
-        const failed = data.data?.failed || 0
         if (failed > 0) {
           setSuccess(`تم إرسال ${sent} رسالة بنجاح، ${failed} فشل`)
         } else {
@@ -598,9 +665,18 @@ export default function CampaignsPage() {
       
       // تحديث البيانات بعد 2 ثانية
       setTimeout(() => {
+        console.log('🔄 تحديث بيانات الحملات...')
         fetchData()
       }, 2000)
     } catch (err: any) {
+      console.error('❌ خطأ في handleSendBatch:', {
+        message: err.message,
+        stack: err.stack,
+        error: err,
+        campaignId,
+        silent
+      })
+      
       if (!silent) {
         let errorMessage = err.message || 'فشل في إرسال الدفعة'
         // محاولة استخراج رسالة الخطأ من response
@@ -615,15 +691,15 @@ export default function CampaignsPage() {
               errorMessage = errorBody.message
             }
           } catch (e) {
-            // تجاهل خطأ parsing
+            console.error('خطأ في parsing error body:', e)
           }
         }
         setError(errorMessage)
         setTimeout(() => setError(''), 5000)
       }
-      console.error('Error sending batch:', err)
     } finally {
       setSendingBatch(null)
+      console.log('✅ انتهى إرسال الدفعة')
     }
   }
 
@@ -638,20 +714,34 @@ export default function CampaignsPage() {
       }
     }, 10000) // كل 10 ثواني
 
-    // إرسال دفعة تلقائياً كل دقيقة للحملات النشطة
+    // إرسال دفعة تلقائياً كل 30 ثانية للحملات النشطة (بدلاً من دقيقة)
     const sendInterval = setInterval(() => {
-      if (sendingBatch) return
+      if (sendingBatch) {
+        console.log('⏸️ إرسال دفعة قيد التنفيذ، تخطي الإرسال التلقائي')
+        return
+      }
       
       const activeCampaigns = campaigns.filter(c => c.status === 'active' && c.total_targets > 0)
+      console.log(`🔍 فحص الحملات النشطة: ${activeCampaigns.length} حملة نشطة`)
+      
       if (activeCampaigns.length > 0) {
         // إرسال دفعة للحملة الأولى النشطة (silent mode)
         const campaign = activeCampaigns[0]
+        console.log(`📊 حالة الحملة: ${campaign.name}`, {
+          sent_count: campaign.sent_count,
+          total_targets: campaign.total_targets,
+          status: campaign.status
+        })
+        
         // التحقق من أن الحملة لم تكتمل بعد
         if (campaign.sent_count < campaign.total_targets) {
+          console.log(`🚀 بدء إرسال دفعة تلقائية للحملة: ${campaign.id}`)
           handleSendBatch(campaign.id, true)
+        } else {
+          console.log(`✅ الحملة ${campaign.name} مكتملة (${campaign.sent_count}/${campaign.total_targets})`)
         }
       }
-    }, 60000) // كل دقيقة
+    }, 30000) // كل 30 ثانية (بدلاً من دقيقة) لتسريع العملية
 
     return () => {
       clearInterval(dataInterval)
