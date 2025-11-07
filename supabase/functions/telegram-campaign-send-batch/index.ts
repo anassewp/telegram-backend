@@ -126,10 +126,24 @@ Deno.serve(async (req) => {
         }
 
         const campaign = campaigns[0];
+        
+        console.log('Campaign loaded:', {
+            id: campaign.id,
+            status: campaign.status,
+            target_type: campaign.target_type,
+            selected_groups: campaign.selected_groups,
+            selected_members: campaign.selected_members,
+            total_targets: campaign.total_targets
+        });
 
         // Check campaign status
         if (campaign.status !== 'active') {
             throw new Error(`الحملة غير نشطة. الحالة الحالية: ${campaign.status}`);
+        }
+        
+        // Check if campaign has targets
+        if (!campaign.total_targets || campaign.total_targets === 0) {
+            throw new Error('الحملة لا تحتوي على أهداف محددة');
         }
 
         // Load sessions
@@ -181,63 +195,237 @@ Deno.serve(async (req) => {
         // Prepare targets based on campaign type
         let targets: any[] = [];
         
+        console.log('Preparing targets...', {
+            target_type: campaign.target_type,
+            selected_groups_type: typeof campaign.selected_groups,
+            selected_groups: campaign.selected_groups,
+            selected_members_type: typeof campaign.selected_members,
+            selected_members: campaign.selected_members
+        });
+        
         if (campaign.target_type === 'groups' || campaign.target_type === 'both') {
-            const selectedGroups = Array.isArray(campaign.selected_groups) ? campaign.selected_groups : [];
+            // معالجة selected_groups من JSONB
+            let selectedGroups: any[] = [];
+            if (campaign.selected_groups) {
+                if (Array.isArray(campaign.selected_groups)) {
+                    selectedGroups = campaign.selected_groups;
+                } else if (typeof campaign.selected_groups === 'string') {
+                    try {
+                        selectedGroups = JSON.parse(campaign.selected_groups);
+                    } catch (e) {
+                        console.error('Error parsing selected_groups:', e);
+                        selectedGroups = [];
+                    }
+                }
+            }
+            
+            console.log('Processed selectedGroups:', selectedGroups);
+            
             if (selectedGroups.length > 0) {
-                const groupsResponse = await fetch(
-                    `${SUPABASE_URL}/rest/v1/telegram_groups?telegram_group_id=in.(${selectedGroups.join(',')})&user_id=eq.${user_id}`,
-                    {
-                        headers: {
-                            'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-                            'apikey': SUPABASE_SERVICE_ROLE_KEY,
-                            'Content-Type': 'application/json'
+                // فصل IDs و usernames
+                const groupIds: number[] = [];
+                const groupUsernames: string[] = [];
+                
+                selectedGroups.forEach((item: any) => {
+                    if (typeof item === 'number') {
+                        groupIds.push(item);
+                    } else if (typeof item === 'object' && item.username) {
+                        groupUsernames.push(item.username);
+                    } else if (typeof item === 'string' && !item.match(/^\d+$/)) {
+                        groupUsernames.push(item.replace('@', ''));
+                    } else if (typeof item === 'string') {
+                        groupIds.push(Number(item));
+                    }
+                });
+
+                // جلب المجموعات من قاعدة البيانات (IDs فقط)
+                if (groupIds.length > 0) {
+                    // محاولة group_id أولاً
+                    let groupsResponse = await fetch(
+                        `${SUPABASE_URL}/rest/v1/telegram_groups?group_id=in.(${groupIds.join(',')})&user_id=eq.${user_id}`,
+                        {
+                            headers: {
+                                'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+                                'apikey': SUPABASE_SERVICE_ROLE_KEY,
+                                'Content-Type': 'application/json'
+                            }
+                        }
+                    );
+
+                    let groups: any[] = [];
+                    if (groupsResponse.ok) {
+                        groups = await groupsResponse.json();
+                    }
+
+                    // إذا لم نجدها، جرب telegram_group_id
+                    if (groups.length < groupIds.length) {
+                        const foundIds = new Set(groups.map((g: any) => g.group_id || g.telegram_group_id || g.id));
+                        const missingIds = groupIds.filter(id => !foundIds.has(id));
+                        
+                        if (missingIds.length > 0) {
+                            const groupsResponse2 = await fetch(
+                                `${SUPABASE_URL}/rest/v1/telegram_groups?telegram_group_id=in.(${missingIds.join(',')})&user_id=eq.${user_id}`,
+                                {
+                                    headers: {
+                                        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+                                        'apikey': SUPABASE_SERVICE_ROLE_KEY,
+                                        'Content-Type': 'application/json'
+                                    }
+                                }
+                            );
+
+                            if (groupsResponse2.ok) {
+                                const groups2 = await groupsResponse2.json();
+                                groups = [...groups, ...groups2];
+                            }
                         }
                     }
-                );
 
-                if (groupsResponse.ok) {
-                    const groups = await groupsResponse.json();
-                    targets.push(...groups.map((g: any) => ({ type: 'group', id: g.telegram_group_id, data: g })));
+                    targets.push(...groups.map((g: any) => ({ 
+                        type: 'group', 
+                        id: g.group_id || g.telegram_group_id || g.id, 
+                        data: g 
+                    })));
                 }
+
+                // إضافة usernames مباشرة (سيتم حلها في Backend)
+                groupUsernames.forEach((username: string) => {
+                    targets.push({ 
+                        type: 'group', 
+                        id: null, 
+                        username: username,
+                        data: { username: username } 
+                    });
+                });
             }
         }
 
         if (campaign.target_type === 'members' || campaign.target_type === 'both') {
-            const selectedMembers = Array.isArray(campaign.selected_members) ? campaign.selected_members : [];
-            if (selectedMembers.length > 0) {
-                // Filter members based on campaign settings
-                const membersResponse = await fetch(
-                    `${SUPABASE_URL}/rest/v1/telegram_members?telegram_user_id=in.(${selectedMembers.join(',')})&user_id=eq.${user_id}`,
-                    {
-                        headers: {
-                            'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-                            'apikey': SUPABASE_SERVICE_ROLE_KEY,
-                            'Content-Type': 'application/json'
-                        }
+            // معالجة selected_members من JSONB
+            let selectedMembers: any[] = [];
+            if (campaign.selected_members) {
+                if (Array.isArray(campaign.selected_members)) {
+                    selectedMembers = campaign.selected_members;
+                } else if (typeof campaign.selected_members === 'string') {
+                    try {
+                        selectedMembers = JSON.parse(campaign.selected_members);
+                    } catch (e) {
+                        console.error('Error parsing selected_members:', e);
+                        selectedMembers = [];
                     }
-                );
-
-                if (membersResponse.ok) {
-                    let members = await membersResponse.json();
-                    
-                    // Apply filters
-                    members = members.filter((m: any) => {
-                        if (campaign.exclude_bots && m.is_bot) return false;
-                        if (campaign.exclude_premium && m.is_premium) return false;
-                        if (campaign.exclude_verified && m.is_verified) return false;
-                        if (campaign.exclude_scam && m.is_scam) return false;
-                        if (campaign.exclude_fake && m.is_fake) return false;
-                        if (sentMemberIds.includes(m.telegram_user_id)) return false;
-                        return true;
-                    });
-
-                    targets.push(...members.map((m: any) => ({ type: 'member', id: m.telegram_user_id, data: m })));
                 }
+            }
+            
+            console.log('Processed selectedMembers:', selectedMembers);
+            
+            if (selectedMembers.length > 0) {
+                // فصل IDs و usernames
+                const memberIds: number[] = [];
+                const memberUsernames: string[] = [];
+                
+                selectedMembers.forEach((item: any) => {
+                    if (typeof item === 'number') {
+                        memberIds.push(item);
+                    } else if (typeof item === 'object' && item.username) {
+                        memberUsernames.push(item.username);
+                    } else if (typeof item === 'string' && !item.match(/^\d+$/)) {
+                        memberUsernames.push(item.replace('@', ''));
+                    } else if (typeof item === 'string') {
+                        memberIds.push(Number(item));
+                    }
+                });
+
+                // جلب الأعضاء من قاعدة البيانات (IDs فقط)
+                if (memberIds.length > 0) {
+                    const membersResponse = await fetch(
+                        `${SUPABASE_URL}/rest/v1/telegram_members?telegram_user_id=in.(${memberIds.join(',')})&user_id=eq.${user_id}`,
+                        {
+                            headers: {
+                                'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+                                'apikey': SUPABASE_SERVICE_ROLE_KEY,
+                                'Content-Type': 'application/json'
+                            }
+                        }
+                    );
+
+                    if (membersResponse.ok) {
+                        let members = await membersResponse.json();
+                        
+                        // Apply filters
+                        members = members.filter((m: any) => {
+                            if (campaign.exclude_bots && m.is_bot) return false;
+                            if (campaign.exclude_premium && m.is_premium) return false;
+                            if (campaign.exclude_verified && m.is_verified) return false;
+                            if (campaign.exclude_scam && m.is_scam) return false;
+                            if (campaign.exclude_fake && m.is_fake) return false;
+                            if (sentMemberIds.includes(m.telegram_user_id)) return false;
+                            return true;
+                        });
+
+                        targets.push(...members.map((m: any) => ({ type: 'member', id: m.telegram_user_id, data: m })));
+                    }
+                }
+
+                // إضافة usernames مباشرة (سيتم حلها في Backend)
+                memberUsernames.forEach((username: string) => {
+                    targets.push({ 
+                        type: 'member', 
+                        id: null, 
+                        username: username,
+                        data: { username: username } 
+                    });
+                });
             }
         }
 
+        console.log('Targets prepared:', {
+            total: targets.length,
+            groups: targets.filter(t => t.type === 'group').length,
+            members: targets.filter(t => t.type === 'member').length
+        });
+        
         if (targets.length === 0) {
-            throw new Error('لا توجد أهداف متاحة للإرسال');
+            // إذا لم توجد أهداف، قد تكون جميعها تم إرسالها
+            console.warn('لا توجد أهداف متاحة للإرسال - قد تكون جميع الأهداف تم إرسالها');
+            
+            // التحقق من حالة الحملة
+            const totalSent = campaign.sent_count || 0;
+            if (totalSent >= campaign.total_targets) {
+                // تحديث حالة الحملة إلى مكتملة
+                await fetch(`${SUPABASE_URL}/rest/v1/telegram_campaigns?id=eq.${campaign_id}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+                        'apikey': SUPABASE_SERVICE_ROLE_KEY,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        status: 'completed',
+                        completed_at: new Date().toISOString(),
+                        updated_at: new Date().toISOString()
+                    })
+                });
+                
+                return new Response(
+                    JSON.stringify({
+                        success: true,
+                        message: 'تم إكمال جميع الأهداف',
+                        data: {
+                            sent: 0,
+                            failed: 0,
+                            total_processed: totalSent,
+                            total_targets: campaign.total_targets,
+                            campaign_status: 'completed'
+                        }
+                    }),
+                    {
+                        status: 200,
+                        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+                    }
+                );
+            }
+            
+            throw new Error('لا توجد أهداف متاحة للإرسال. تحقق من إعدادات الفلترة أو أن جميع الأهداف تم إرسالها');
         }
 
         // Limit batch size
@@ -271,29 +459,49 @@ Deno.serve(async (req) => {
                     // Send message based on target type
                     let sendResponse;
                     if (target.type === 'group') {
+                        // دعم usernames و IDs
+                        const requestBody: any = {
+                            session_string: session.session_string,
+                            api_id: session.api_id,
+                            api_hash: session.api_hash,
+                            message: messageText
+                        };
+                        
+                        if (target.id) {
+                            requestBody.group_id = target.id;
+                        } else if (target.username) {
+                            requestBody.username = target.username;
+                        } else {
+                            throw new Error('لا يوجد group_id أو username للمجموعة');
+                        }
+                        
                         sendResponse = await fetch(`${TELEGRAM_BACKEND_URL}/messages/send`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                session_string: session.session_string,
-                                api_id: session.api_id,
-                                api_hash: session.api_hash,
-                                group_id: target.id,
-                                message: messageText
-                            })
+                            body: JSON.stringify(requestBody)
                         });
                     } else if (target.type === 'member') {
+                        // دعم usernames و IDs
+                        const requestBody: any = {
+                            session_string: session.session_string,
+                            api_id: session.api_id,
+                            api_hash: session.api_hash,
+                            message: messageText,
+                            personalize: campaign.personalize_messages
+                        };
+                        
+                        if (target.id) {
+                            requestBody.member_telegram_id = target.id;
+                        } else if (target.username) {
+                            requestBody.username = target.username;
+                        } else {
+                            throw new Error('لا يوجد member_telegram_id أو username للعضو');
+                        }
+                        
                         sendResponse = await fetch(`${TELEGRAM_BACKEND_URL}/messages/send-to-member`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                session_string: session.session_string,
-                                api_id: session.api_id,
-                                api_hash: session.api_hash,
-                                member_telegram_id: target.id,
-                                message: messageText,
-                                personalize: campaign.personalize_messages
-                            })
+                            body: JSON.stringify(requestBody)
                         });
                     } else {
                         continue;
@@ -320,12 +528,18 @@ Deno.serve(async (req) => {
                         };
 
                         if (target.type === 'group') {
-                            messageRecord.group_id = target.id;
-                            messageRecord.group_title = target.data.title;
+                            messageRecord.group_id = target.id || target.username;
+                            messageRecord.group_title = target.data?.title || target.username || 'Unknown';
+                            if (target.username) {
+                                messageRecord.group_username = target.username;
+                            }
                         } else {
-                            messageRecord.member_id = target.data.id;
-                            messageRecord.member_telegram_id = target.id;
+                            messageRecord.member_id = target.data?.id;
+                            messageRecord.member_telegram_id = target.id || target.username;
                             messageRecord.personalized_text = messageText;
+                            if (target.username) {
+                                messageRecord.member_username = target.username;
+                            }
                         }
 
                         await fetch(`${SUPABASE_URL}/rest/v1/telegram_campaign_messages`, {
@@ -339,7 +553,7 @@ Deno.serve(async (req) => {
                         });
 
                         // Save to telegram_sent_members if member
-                        if (target.type === 'member') {
+                        if (target.type === 'member' && (target.id || target.username)) {
                             await fetch(`${SUPABASE_URL}/rest/v1/telegram_sent_members`, {
                                 method: 'POST',
                                 headers: {
@@ -350,7 +564,8 @@ Deno.serve(async (req) => {
                                 body: JSON.stringify({
                                     user_id: user_id,
                                     campaign_id: campaign_id,
-                                    member_telegram_id: target.id,
+                                    member_telegram_id: target.id || target.username,
+                                    member_username: target.username || null,
                                     message_text: messageText,
                                     sent_at: new Date().toISOString()
                                 })
@@ -359,7 +574,8 @@ Deno.serve(async (req) => {
 
                         results.push({
                             target_type: target.type,
-                            target_id: target.id,
+                            target_id: target.id || target.username,
+                            target_username: target.username || null,
                             success: true,
                             message_id: sendResult.message_id
                         });
@@ -378,10 +594,38 @@ Deno.serve(async (req) => {
                     await new Promise(resolve => setTimeout(resolve, delay * 1000));
 
                 } catch (error: any) {
+                    // Logging شامل للأخطاء في كل رسالة
+                    const errorLog = {
+                        timestamp: new Date().toISOString(),
+                        target_type: target.type,
+                        target_id: target.id || target.username,
+                        target_username: target.username || null,
+                        session_id: session.id,
+                        session_name: session.session_name,
+                        error_name: error?.name || 'Unknown',
+                        error_message: error?.message || 'خطأ غير معروف',
+                        error_stack: error?.stack || 'No stack trace',
+                        request_body: target.type === 'group' ? {
+                            group_id: target.id,
+                            username: target.username,
+                            message_length: messageText.length
+                        } : {
+                            member_telegram_id: target.id,
+                            username: target.username,
+                            message_length: messageText.length
+                        }
+                    };
+
+                    console.error('========== خطأ في إرسال رسالة ==========');
+                    console.error(JSON.stringify(errorLog, null, 2));
+                    console.error('========================================');
+
                     errors.push({
                         target_type: target.type,
-                        target_id: target.id,
-                        error: error.message || 'خطأ غير معروف'
+                        target_id: target.id || target.username,
+                        target_username: target.username || null,
+                        error: error.message || 'خطأ غير معروف',
+                        error_details: errorLog
                     });
 
                     // Save failed message
@@ -397,9 +641,16 @@ Deno.serve(async (req) => {
                     };
 
                     if (target.type === 'group') {
-                        messageRecord.group_id = target.id;
+                        messageRecord.group_id = target.id || target.username;
+                        messageRecord.group_title = target.data?.title || target.username || 'Unknown';
+                        if (target.username) {
+                            messageRecord.group_username = target.username;
+                        }
                     } else {
-                        messageRecord.member_telegram_id = target.id;
+                        messageRecord.member_telegram_id = target.id || target.username;
+                        if (target.username) {
+                            messageRecord.member_username = target.username;
+                        }
                     }
 
                     await fetch(`${SUPABASE_URL}/rest/v1/telegram_campaign_messages`, {
@@ -479,7 +730,33 @@ Deno.serve(async (req) => {
         );
 
     } catch (error: any) {
-        console.error('خطأ في إرسال دفعة الرسائل:', error);
+        // Logging شامل للأخطاء
+        const errorDetails = {
+            timestamp: new Date().toISOString(),
+            error_name: error?.name || 'Unknown',
+            error_message: error?.message || 'خطأ غير معروف',
+            error_stack: error?.stack || 'No stack trace',
+            error_cause: error?.cause || null,
+            request_data: {
+                campaign_id: requestData?.campaign_id || null,
+                user_id: requestData?.user_id || null,
+                batch_size: requestData?.batch_size || null
+            },
+            environment: {
+                supabase_url: SUPABASE_URL ? 'Set' : 'Missing',
+                telegram_backend_url: TELEGRAM_BACKEND_URL || 'Not set'
+            }
+        };
+
+        console.error('========== خطأ في إرسال دفعة الرسائل ==========');
+        console.error('Timestamp:', errorDetails.timestamp);
+        console.error('Error Name:', errorDetails.error_name);
+        console.error('Error Message:', errorDetails.error_message);
+        console.error('Error Stack:', errorDetails.error_stack);
+        console.error('Request Data:', JSON.stringify(errorDetails.request_data, null, 2));
+        console.error('Environment:', JSON.stringify(errorDetails.environment, null, 2));
+        console.error('Full Error Object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        console.error('===============================================');
 
         return new Response(
             JSON.stringify({
@@ -487,7 +764,8 @@ Deno.serve(async (req) => {
                 error: {
                     code: 'CAMPAIGN_SEND_BATCH_FAILED',
                     message: error.message || 'خطأ في إرسال دفعة الرسائل',
-                    timestamp: new Date().toISOString()
+                    timestamp: new Date().toISOString(),
+                    details: errorDetails
                 }
             }),
             {

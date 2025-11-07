@@ -43,11 +43,27 @@ interface Campaign {
 
 interface TelegramGroup {
   id: string
-  telegram_group_id: number
+  group_id: number
+  telegram_group_id?: number // للتوافق مع البيانات القديمة
   title: string
   username: string | null
   members_count: number
   type: string
+}
+
+interface TelegramMember {
+  id: string
+  telegram_user_id: number
+  first_name: string | null
+  last_name: string | null
+  username: string | null
+  is_bot: boolean
+  is_premium: boolean
+  is_verified: boolean
+  is_scam: boolean
+  is_fake: boolean
+  group_id: number
+  group_title?: string
 }
 
 interface TelegramSession {
@@ -61,12 +77,23 @@ export default function CampaignsPage() {
   const [mounted, setMounted] = useState(false)
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [groups, setGroups] = useState<TelegramGroup[]>([])
+  const [members, setMembers] = useState<TelegramMember[]>([])
+  const [filteredMembers, setFilteredMembers] = useState<TelegramMember[]>([])
+  const [selectedGroupForMembers, setSelectedGroupForMembers] = useState<string>('')
   const [sessions, setSessions] = useState<TelegramSession[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingMembers, setLoadingMembers] = useState(false)
+  
+  // لإدخال usernames يدوياً
+  const [manualGroupUsernames, setManualGroupUsernames] = useState<string>('')
+  const [manualMemberUsernames, setManualMemberUsernames] = useState<string>('')
+  const [manualGroupIds, setManualGroupIds] = useState<number[]>([]) // للـ group IDs المدخلة يدوياً
+  const [manualMemberIds, setManualMemberIds] = useState<number[]>([]) // للـ member IDs المدخلة يدوياً
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [sendingBatch, setSendingBatch] = useState<string | null>(null) // campaign_id الجاري إرسال دفعة لها
 
   // Form data
   const [formData, setFormData] = useState({
@@ -76,6 +103,8 @@ export default function CampaignsPage() {
     target_type: 'groups' as 'groups' | 'members' | 'both',
     selected_groups: [] as number[],
     selected_members: [] as number[],
+    selected_group_usernames: [] as string[], // للـ usernames غير المحلولة
+    selected_member_usernames: [] as string[], // للـ usernames غير المحلولة
     session_ids: [] as string[],
     distribution_strategy: 'equal' as 'equal' | 'round_robin' | 'random' | 'weighted',
     max_messages_per_session: 100,
@@ -98,6 +127,118 @@ export default function CampaignsPage() {
     setMounted(true)
     fetchData()
   }, [])
+
+  // تحديث البيانات كل 10 ثواني للحملات النشطة
+  useEffect(() => {
+    if (!mounted) return
+
+    const activeCampaigns = campaigns.filter(c => c.status === 'active')
+    if (activeCampaigns.length === 0) return
+
+    const interval = setInterval(() => {
+      fetchData()
+    }, 10000) // كل 10 ثواني
+
+    return () => clearInterval(interval)
+  }, [campaigns, mounted])
+
+  const fetchMembersFromGroup = async (groupId: string | number) => {
+    setLoadingMembers(true)
+    setError('')
+    
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      const { data: membersData, error: membersError } = await supabase
+        .from('telegram_members')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('group_id', Number(groupId))
+        .order('first_name')
+
+      if (membersError) throw membersError
+      
+      const formattedMembers = (membersData || []).map((m: any) => ({
+        id: m.id,
+        telegram_user_id: m.telegram_user_id,
+        first_name: m.first_name,
+        last_name: m.last_name,
+        username: m.username,
+        is_bot: m.is_bot || false,
+        is_premium: m.is_premium || false,
+        is_verified: m.is_verified || false,
+        is_scam: m.is_scam || false,
+        is_fake: m.is_fake || false,
+        group_id: Number(groupId)
+      }))
+
+      setMembers(formattedMembers)
+      
+      // تطبيق الفلاتر من formData
+      let filtered = formattedMembers
+      
+      if (formData.exclude_bots) {
+        filtered = filtered.filter(m => !m.is_bot)
+      }
+      if (formData.exclude_premium) {
+        filtered = filtered.filter(m => !m.is_premium)
+      }
+      if (formData.exclude_verified) {
+        filtered = filtered.filter(m => !m.is_verified)
+      }
+      if (formData.exclude_scam) {
+        filtered = filtered.filter(m => !m.is_scam)
+      }
+      if (formData.exclude_fake) {
+        filtered = filtered.filter(m => !m.is_fake)
+      }
+      
+      setFilteredMembers(filtered)
+      
+    } catch (err: any) {
+      console.error('Error fetching members:', err)
+      setError(err.message || 'حدث خطأ في جلب الأعضاء')
+    } finally {
+      setLoadingMembers(false)
+    }
+  }
+
+  // تحديث الفلاتر عند تغيير إعدادات الاستبعاد
+  useEffect(() => {
+    if (members.length === 0) return
+    
+    let filtered = [...members]
+    
+    if (formData.exclude_bots) {
+      filtered = filtered.filter(m => !m.is_bot)
+    }
+    if (formData.exclude_premium) {
+      filtered = filtered.filter(m => !m.is_premium)
+    }
+    if (formData.exclude_verified) {
+      filtered = filtered.filter(m => !m.is_verified)
+    }
+    if (formData.exclude_scam) {
+      filtered = filtered.filter(m => !m.is_scam)
+    }
+    if (formData.exclude_fake) {
+      filtered = filtered.filter(m => !m.is_fake)
+    }
+    
+    setFilteredMembers(filtered)
+    
+    // إزالة الأعضاء المفلترة من الاختيار
+    const validMembers = filtered.map(m => m.telegram_user_id)
+    const invalidSelected = formData.selected_members.filter(id => !validMembers.includes(id))
+    if (invalidSelected.length > 0) {
+      setFormData(prev => ({
+        ...prev,
+        selected_members: prev.selected_members.filter(id => validMembers.includes(id))
+      }))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [members, formData.exclude_bots, formData.exclude_premium, formData.exclude_verified, formData.exclude_scam, formData.exclude_fake])
 
   const fetchData = async () => {
     try {
@@ -133,7 +274,7 @@ export default function CampaignsPage() {
 
       setCampaigns(formattedCampaigns)
 
-      // جلب المجموعات
+      // جلب المجموعات - فقط المجموعات (ليس القنوات) والتي يمكن الإرسال لها أو استخراج أعضائها
       const { data: groupsData, error: groupsError } = await supabase
         .from('telegram_groups')
         .select('*')
@@ -141,7 +282,29 @@ export default function CampaignsPage() {
         .order('title')
 
       if (groupsError) throw groupsError
-      setGroups(groupsData || [])
+      
+      // تحويل البيانات والتأكد من وجود group_id
+      let formattedGroups = (groupsData || []).map((g: any) => ({
+        ...g,
+        group_id: g.group_id || g.telegram_group_id || g.id,
+        telegram_group_id: g.telegram_group_id || g.group_id
+      }))
+      
+      // تصفية: فقط المجموعات (ليس القنوات) والتي يمكن الإرسال لها أو استخراج أعضائها بالكامل
+      formattedGroups = formattedGroups.filter((g: any) => {
+        // استبعاد القنوات
+        if (g.type === 'channel') return false
+        
+        // فقط المجموعات التي يمكن الإرسال لها (can_send === true) أو يمكن استخراج أعضائها بالكامل
+        const canSend = g.can_send === true || g.can_send === undefined // إذا لم يتم تحديد can_send، نعتبره true
+        const canExtractMembers = g.members_visibility_type === 'fully_visible' || 
+                                  (g.members_visibility_type === undefined && g.members_visible === true) ||
+                                  (g.members_visibility_type === undefined && g.members_visible === undefined && g.has_visible_participants === true)
+        
+        return canSend || canExtractMembers
+      })
+      
+      setGroups(formattedGroups)
 
       // جلب الجلسات
       const { data: sessionsData, error: sessionsError } = await supabase
@@ -168,18 +331,34 @@ export default function CampaignsPage() {
       return
     }
 
-    if (formData.target_type === 'groups' || formData.target_type === 'both') {
-      if (formData.selected_groups.length === 0) {
-        setError('يجب تحديد مجموعة واحدة على الأقل')
-        return
+    // التحقق حسب نوع الحملة (مع حساب usernames)
+    if (formData.campaign_type === 'groups' || formData.campaign_type === 'mixed') {
+      if (formData.target_type === 'groups' || formData.target_type === 'both') {
+        const totalGroups = formData.selected_groups.length + formData.selected_group_usernames.length
+        if (totalGroups === 0) {
+          setError('يجب تحديد مجموعة واحدة على الأقل (ID أو username)')
+          return
+        }
       }
     }
 
-    if (formData.target_type === 'members' || formData.target_type === 'both') {
-      if (formData.selected_members.length === 0) {
-        setError('يجب تحديد عضو واحد على الأقل')
-        return
+    if (formData.campaign_type === 'members' || formData.campaign_type === 'mixed') {
+      if (formData.target_type === 'members' || formData.target_type === 'both') {
+        const totalMembers = formData.selected_members.length + formData.selected_member_usernames.length
+        if (totalMembers === 0) {
+          setError('يجب تحديد عضو واحد على الأقل (ID أو username)')
+          return
+        }
       }
+    }
+
+    // التحقق من أن هناك أهداف محددة
+    const totalTargets = 
+      formData.selected_groups.length + formData.selected_group_usernames.length +
+      formData.selected_members.length + formData.selected_member_usernames.length
+    if (totalTargets === 0) {
+      setError('يجب تحديد مجموعة أو عضو واحد على الأقل')
+      return
     }
 
     setSending(true)
@@ -198,13 +377,34 @@ export default function CampaignsPage() {
         }
       })
 
-      if (createError) throw createError
+      if (createError) {
+        console.error('Edge Function Error:', createError)
+        // محاولة استخراج رسالة الخطأ من response
+        let errorMessage = createError.message || 'حدث خطأ غير معروف'
+        if (createError.context && createError.context.body) {
+          try {
+            const errorBody = typeof createError.context.body === 'string' 
+              ? JSON.parse(createError.context.body) 
+              : createError.context.body
+            if (errorBody.error && errorBody.error.message) {
+              errorMessage = errorBody.error.message
+            } else if (errorBody.message) {
+              errorMessage = errorBody.message
+            }
+          } catch (e) {
+            console.error('Error parsing error body:', e)
+          }
+        }
+        throw new Error(errorMessage)
+      }
 
       if (data?.error) {
+        console.error('Error from Edge Function:', data.error)
         throw new Error(data.error.message || 'فشل في إنشاء الحملة')
       }
 
       if (!data?.success) {
+        console.error('Campaign creation failed:', data)
         throw new Error('فشل في إنشاء الحملة')
       }
 
@@ -234,6 +434,14 @@ export default function CampaignsPage() {
         vary_emojis: false,
         schedule_at: ''
       })
+      // مسح الحقول اليدوية
+      setManualGroupUsernames('')
+      setManualMemberUsernames('')
+      setManualGroupIds([])
+      setManualMemberIds([])
+      setSelectedGroupForMembers('')
+      setMembers([])
+      setFilteredMembers([])
       
       // إعادة تحميل البيانات
       setTimeout(() => {
@@ -313,6 +521,144 @@ export default function CampaignsPage() {
       setError(err.message || 'فشل في استئناف الحملة')
     }
   }
+
+  const handleDeleteCampaign = async (campaignId: string) => {
+    if (!confirm('هل أنت متأكد من حذف هذه الحملة؟ لا يمكن التراجع عن هذا الإجراء.')) {
+      return
+    }
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('المستخدم غير مسجل الدخول')
+
+      // حذف الحملة من قاعدة البيانات
+      const { error } = await supabase
+        .from('telegram_campaigns')
+        .delete()
+        .eq('id', campaignId)
+        .eq('user_id', user.id)
+
+      if (error) throw error
+
+      setSuccess('تم حذف الحملة بنجاح')
+      fetchData()
+    } catch (err: any) {
+      setError(err.message || 'فشل في حذف الحملة')
+    }
+  }
+
+  const handleRefresh = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      await fetchData()
+      setSuccess('تم تحديث البيانات')
+      setTimeout(() => setSuccess(''), 2000)
+    } catch (err: any) {
+      setError(err.message || 'فشل في تحديث البيانات')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleSendBatch = async (campaignId: string, silent: boolean = false) => {
+    if (sendingBatch) return // منع إرسال متعدد
+
+    setSendingBatch(campaignId)
+    if (!silent) {
+      setError('')
+      setSuccess('')
+    }
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('المستخدم غير مسجل الدخول')
+
+      const { data, error } = await supabase.functions.invoke('telegram-campaign-send-batch', {
+        body: {
+          campaign_id: campaignId,
+          user_id: user.id,
+          batch_size: 10 // حجم الدفعة
+        }
+      })
+
+      if (error) throw error
+      if (data?.error) throw new Error(data.error.message)
+
+      if (!silent) {
+        const sent = data.data?.sent || 0
+        const failed = data.data?.failed || 0
+        if (failed > 0) {
+          setSuccess(`تم إرسال ${sent} رسالة بنجاح، ${failed} فشل`)
+        } else {
+          setSuccess(`تم إرسال ${sent} رسالة بنجاح`)
+        }
+        setTimeout(() => setSuccess(''), 5000)
+      }
+      
+      // تحديث البيانات بعد 2 ثانية
+      setTimeout(() => {
+        fetchData()
+      }, 2000)
+    } catch (err: any) {
+      if (!silent) {
+        let errorMessage = err.message || 'فشل في إرسال الدفعة'
+        // محاولة استخراج رسالة الخطأ من response
+        if (err.context && err.context.body) {
+          try {
+            const errorBody = typeof err.context.body === 'string' 
+              ? JSON.parse(err.context.body) 
+              : err.context.body
+            if (errorBody.error && errorBody.error.message) {
+              errorMessage = errorBody.error.message
+            } else if (errorBody.message) {
+              errorMessage = errorBody.message
+            }
+          } catch (e) {
+            // تجاهل خطأ parsing
+          }
+        }
+        setError(errorMessage)
+        setTimeout(() => setError(''), 5000)
+      }
+      console.error('Error sending batch:', err)
+    } finally {
+      setSendingBatch(null)
+    }
+  }
+
+  // Polling تلقائي للحملات النشطة (بعد تعريف handleSendBatch)
+  useEffect(() => {
+    if (!mounted) return
+
+    // تحديث البيانات كل 10 ثواني
+    const dataInterval = setInterval(() => {
+      if (!loading && !sendingBatch) {
+        fetchData()
+      }
+    }, 10000) // كل 10 ثواني
+
+    // إرسال دفعة تلقائياً كل دقيقة للحملات النشطة
+    const sendInterval = setInterval(() => {
+      if (sendingBatch) return
+      
+      const activeCampaigns = campaigns.filter(c => c.status === 'active' && c.total_targets > 0)
+      if (activeCampaigns.length > 0) {
+        // إرسال دفعة للحملة الأولى النشطة (silent mode)
+        const campaign = activeCampaigns[0]
+        // التحقق من أن الحملة لم تكتمل بعد
+        if (campaign.sent_count < campaign.total_targets) {
+          handleSendBatch(campaign.id, true)
+        }
+      }
+    }, 60000) // كل دقيقة
+
+    return () => {
+      clearInterval(dataInterval)
+      clearInterval(sendInterval)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaigns, mounted, sendingBatch, loading])
 
   const getStatusBadge = (status: Campaign['status']) => {
     const styles = {
@@ -517,21 +863,33 @@ export default function CampaignsPage() {
                 </div>
 
                 {/* Progress Bar */}
-                {campaign.status !== 'scheduled' && campaign.status !== 'draft' && campaign.total_targets > 0 && (
+                {campaign.status !== 'scheduled' && campaign.status !== 'draft' && (
                   <div className="mb-4">
                     <div className="flex justify-between text-sm text-gray-600 mb-2">
                       <span>التقدم</span>
-                      <span>{campaign.sent_count.toLocaleString()} / {campaign.total_targets.toLocaleString()}</span>
+                      <span>
+                        {campaign.sent_count.toLocaleString()} / {Math.max(campaign.total_targets, 1).toLocaleString()}
+                      </span>
                     </div>
                     <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
                       <div 
                         className="h-full bg-gradient-to-r from-orange-600 to-red-600 rounded-full transition-all"
-                        style={{ width: `${Math.min((campaign.sent_count / campaign.total_targets) * 100, 100)}%` }}
+                        style={{ 
+                          width: `${Math.min(
+                            (campaign.sent_count / Math.max(campaign.total_targets, 1)) * 100, 
+                            100
+                          )}%` 
+                        }}
                       />
                     </div>
                     {campaign.failed_count > 0 && (
                       <div className="text-xs text-red-600 mt-1">
                         {campaign.failed_count} فشل
+                      </div>
+                    )}
+                    {campaign.total_targets === 0 && (
+                      <div className="text-xs text-yellow-600 mt-1">
+                        ⚠️ لا توجد أهداف محددة في هذه الحملة
                       </div>
                     )}
                   </div>
@@ -548,13 +906,32 @@ export default function CampaignsPage() {
                       <span>بدء</span>
                     </button>
                   ) : campaign.status === 'active' ? (
-                    <button 
-                      onClick={() => handlePauseCampaign(campaign.id)}
-                      className="flex-1 px-4 py-2 bg-yellow-50 hover:bg-yellow-100 text-yellow-700 rounded-lg font-medium transition-colors text-sm flex items-center justify-center gap-2"
-                    >
-                      <Pause className="w-4 h-4" />
-                      <span>إيقاف</span>
-                    </button>
+                    <>
+                      <button 
+                        onClick={() => handlePauseCampaign(campaign.id)}
+                        className="flex-1 px-4 py-2 bg-yellow-50 hover:bg-yellow-100 text-yellow-700 rounded-lg font-medium transition-colors text-sm flex items-center justify-center gap-2"
+                      >
+                        <Pause className="w-4 h-4" />
+                        <span>إيقاف</span>
+                      </button>
+                      <button 
+                        onClick={() => handleSendBatch(campaign.id)}
+                        disabled={sendingBatch === campaign.id}
+                        className="flex-1 px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg font-medium transition-colors text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {sendingBatch === campaign.id ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>جاري الإرسال...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Send className="w-4 h-4" />
+                            <span>إرسال دفعة</span>
+                          </>
+                        )}
+                      </button>
+                    </>
                   ) : campaign.status === 'paused' ? (
                     <button 
                       onClick={() => handleResumeCampaign(campaign.id)}
@@ -566,14 +943,23 @@ export default function CampaignsPage() {
                   ) : null}
                   
                   <button 
-                    onClick={() => fetchData()}
-                    className="px-4 py-2 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded-lg font-medium transition-colors text-sm flex items-center justify-center gap-2"
+                    onClick={handleRefresh}
+                    disabled={loading}
+                    className="px-4 py-2 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded-lg font-medium transition-colors text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <RefreshCw className="w-4 h-4" />
+                    {loading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="w-4 h-4" />
+                    )}
                     <span>تحديث</span>
                   </button>
                   
-                  <button className="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg font-medium transition-colors text-sm">
+                  <button 
+                    onClick={() => handleDeleteCampaign(campaign.id)}
+                    className="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg font-medium transition-colors text-sm flex items-center justify-center gap-2"
+                    title="حذف الحملة"
+                  >
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
@@ -609,6 +995,8 @@ export default function CampaignsPage() {
                     target_type: 'groups',
                     selected_groups: [],
                     selected_members: [],
+                    selected_group_usernames: [],
+                    selected_member_usernames: [],
                     session_ids: [],
                     distribution_strategy: 'equal',
                     max_messages_per_session: 100,
@@ -626,6 +1014,14 @@ export default function CampaignsPage() {
                     vary_emojis: false,
                     schedule_at: ''
                   })
+                  // مسح الحقول اليدوية
+                  setManualGroupUsernames('')
+                  setManualMemberUsernames('')
+                  setManualGroupIds([])
+                  setManualMemberIds([])
+                  setSelectedGroupForMembers('')
+                  setMembers([])
+                  setFilteredMembers([])
                   setError('')
                 }}
                 className="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center"
@@ -660,13 +1056,27 @@ export default function CampaignsPage() {
                   </label>
                   <select
                     value={formData.campaign_type}
-                    onChange={(e) => setFormData({ ...formData, campaign_type: e.target.value as any })}
+                    onChange={(e) => {
+                      const newType = e.target.value as any
+                      setFormData({ 
+                        ...formData, 
+                        campaign_type: newType,
+                        target_type: newType === 'groups' ? 'groups' : newType === 'members' ? 'members' : 'both',
+                        selected_groups: newType === 'members' ? [] : formData.selected_groups,
+                        selected_members: newType === 'groups' ? [] : formData.selected_members
+                      })
+                    }}
                     className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
                   >
                     <option value="groups">مجموعات فقط</option>
                     <option value="members">أعضاء فقط</option>
                     <option value="mixed">مختلط</option>
                   </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {formData.campaign_type === 'groups' && 'سيتم إرسال الرسالة للمجموعات المحددة'}
+                    {formData.campaign_type === 'members' && 'سيتم إرسال رسائل مباشرة للأعضاء المحددين'}
+                    {formData.campaign_type === 'mixed' && 'يمكنك اختيار مجموعات وأعضاء معاً'}
+                  </p>
                 </div>
 
                 {/* Message */}
@@ -689,79 +1099,599 @@ export default function CampaignsPage() {
               <div className="space-y-4">
                 <h4 className="text-lg font-bold text-gray-900 border-b pb-2">اختيار الأهداف</h4>
                 
-                {/* Target Type */}
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-2">
-                    نوع الهدف
-                  </label>
-                  <select
-                    value={formData.target_type}
-                    onChange={(e) => setFormData({ ...formData, target_type: e.target.value as any, selected_groups: [], selected_members: [] })}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
-                  >
-                    <option value="groups">مجموعات</option>
-                    <option value="members">أعضاء</option>
-                    <option value="both">كلاهما</option>
-                  </select>
-                </div>
-
-                {/* Groups Selection */}
-                {(formData.target_type === 'groups' || formData.target_type === 'both') && (
+                {/* Target Type - Only show if campaign_type is mixed */}
+                {formData.campaign_type === 'mixed' && (
                   <div>
                     <label className="block text-sm font-bold text-gray-700 mb-2">
-                      اختر المجموعات ({formData.selected_groups.length} محدد) *
+                      نوع الهدف
                     </label>
-                    <div className="max-h-48 overflow-y-auto border-2 border-gray-200 rounded-xl p-3 space-y-2">
-                      {groups.length === 0 ? (
-                        <p className="text-gray-500 text-sm text-center py-4">
-                          لا توجد مجموعات. استورد مجموعاتك أولاً من صفحة المجموعات.
-                        </p>
-                      ) : (
-                        groups.map((group) => (
-                          <label
-                            key={group.id}
-                            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 cursor-pointer"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={formData.selected_groups.includes(group.telegram_group_id)}
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  setFormData({
-                                    ...formData,
-                                    selected_groups: [...formData.selected_groups, group.telegram_group_id]
-                                  })
+                    <select
+                      value={formData.target_type}
+                      onChange={(e) => setFormData({ ...formData, target_type: e.target.value as any, selected_groups: [], selected_members: [] })}
+                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                    >
+                      <option value="groups">مجموعات فقط</option>
+                      <option value="members">أعضاء فقط</option>
+                      <option value="both">كلاهما</option>
+                    </select>
+                    <p className="text-xs text-gray-500 mt-1">اختر نوع الأهداف للحملة المختلطة</p>
+                  </div>
+                )}
+
+                {/* Groups Selection */}
+                {(formData.campaign_type === 'groups' || 
+                  (formData.campaign_type === 'mixed' && (formData.target_type === 'groups' || formData.target_type === 'both'))) && (
+                  <div className="space-y-4">
+                    {/* إدخال usernames يدوياً */}
+                    <div>
+                      <label className="block text-sm font-bold text-gray-700 mb-2">
+                        إضافة مجموعات يدوياً (usernames أو IDs)
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={manualGroupUsernames}
+                          onChange={(e) => setManualGroupUsernames(e.target.value)}
+                          placeholder="مثال: @group1 @group2 أو 123456789 -123456789"
+                          className="flex-1 px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!manualGroupUsernames.trim()) return
+                            
+                            setError('')
+                            const inputs = manualGroupUsernames.trim().split(/\s+/)
+                            const newIds: number[] = []
+                            const unresolvedUsernames: string[] = []
+                            
+                            for (const input of inputs) {
+                              // إزالة @ إذا كان موجوداً
+                              const cleanInput = input.replace(/^@/, '').trim()
+                              
+                              // محاولة التحويل إلى رقم (ID)
+                              const numId = Number(cleanInput)
+                              if (!isNaN(numId) && numId !== 0) {
+                                newIds.push(numId)
+                              } else if (cleanInput) {
+                                // البحث في المجموعات المستوردة أولاً
+                                const foundGroup = groups.find(g => {
+                                  const gUsername = g.username?.toLowerCase().replace('@', '')
+                                  return gUsername === cleanInput.toLowerCase()
+                                })
+                                
+                                if (foundGroup) {
+                                  const groupId = foundGroup.group_id || foundGroup.telegram_group_id || Number(foundGroup.id)
+                                  newIds.push(groupId)
                                 } else {
-                                  setFormData({
-                                    ...formData,
-                                    selected_groups: formData.selected_groups.filter(id => id !== group.telegram_group_id)
-                                  })
+                                  // إذا لم نجدها، نحفظ username (سيتم إرسالها كـ username)
+                                  unresolvedUsernames.push(cleanInput)
+                                  // يمكن إضافة Edge Function لحل usernames لاحقاً
                                 }
-                              }}
-                              className="w-5 h-5 text-orange-600 rounded"
-                            />
-                            <div className="flex-1">
-                              <div className="font-medium text-gray-900">{group.title}</div>
-                              <div className="text-xs text-gray-500">
-                                {group.members_count.toLocaleString()} عضو • {group.type}
+                              }
+                            }
+                            
+                            if (newIds.length > 0 || unresolvedUsernames.length > 0) {
+                              // حساب uniqueIds و uniqueUsernames
+                              let uniqueIds = [...formData.selected_groups]
+                              let uniqueUsernames = [...formData.selected_group_usernames]
+                              
+                              // إضافة IDs المباشرة
+                              if (newIds.length > 0) {
+                                uniqueIds = [...new Set([...formData.selected_groups, ...newIds])]
+                                setManualGroupIds([...new Set([...manualGroupIds, ...newIds])])
+                              }
+                              
+                              // حفظ usernames غير المحلولة
+                              if (unresolvedUsernames.length > 0) {
+                                uniqueUsernames = [...new Set([...formData.selected_group_usernames, ...unresolvedUsernames])]
+                              }
+                              
+                              // تحديث formData مرة واحدة
+                              setFormData({
+                                ...formData,
+                                selected_groups: uniqueIds,
+                                selected_group_usernames: uniqueUsernames
+                              })
+                              
+                              // رسالة النجاح
+                              if (unresolvedUsernames.length > 0 && newIds.length > 0) {
+                                setSuccess(`تم إضافة ${newIds.length} مجموعة و ${unresolvedUsernames.length} username`)
+                              } else if (unresolvedUsernames.length > 0) {
+                                setSuccess(`تم إضافة ${unresolvedUsernames.length} username`)
+                              } else {
+                                setSuccess(`تم إضافة ${newIds.length} مجموعة بنجاح`)
+                              }
+                              
+                              setManualGroupUsernames('')
+                              
+                              // إخفاء رسالة النجاح بعد 3 ثواني
+                              setTimeout(() => setSuccess(''), 3000)
+                            } else {
+                              setError('لم يتم العثور على أي مجموعة. تأكد من صحة الـ IDs أو usernames')
+                            }
+                          }}
+                          className="px-6 py-3 bg-orange-600 text-white rounded-xl font-medium hover:bg-orange-700 transition-colors"
+                        >
+                          إضافة
+                        </button>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        يمكنك إدخال usernames مثل @group1 أو IDs مثل 123456789 (مفصولة بمسافات)
+                      </p>
+                    </div>
+
+                    {/* قائمة المجموعات */}
+                    <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-2">
+                      اختر المجموعات ({formData.selected_groups.length + formData.selected_group_usernames.length} محدد) *
+                    </label>
+                      <div className="max-h-48 overflow-y-auto border-2 border-gray-200 rounded-xl p-3 space-y-2">
+                        {groups.length === 0 && manualGroupIds.length === 0 ? (
+                          <p className="text-gray-500 text-sm text-center py-4">
+                            لا توجد مجموعات. استورد مجموعاتك أولاً من صفحة المجموعات أو أضف usernames يدوياً.
+                          </p>
+                        ) : (
+                          <>
+                            {/* المجموعات المستوردة */}
+                            {groups.map((group) => {
+                              const groupId = group.group_id || group.telegram_group_id || Number(group.id)
+                              return (
+                                <label
+                                  key={group.id}
+                                  className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 cursor-pointer"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={formData.selected_groups.includes(groupId)}
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        setFormData({
+                                          ...formData,
+                                          selected_groups: [...formData.selected_groups, groupId]
+                                        })
+                                      } else {
+                                        setFormData({
+                                          ...formData,
+                                          selected_groups: formData.selected_groups.filter(id => id !== groupId)
+                                        })
+                                      }
+                                    }}
+                                    className="w-5 h-5 text-orange-600 rounded"
+                                  />
+                                  <div className="flex-1">
+                                    <div className="font-medium text-gray-900">{group.title}</div>
+                                    <div className="text-xs text-gray-500">
+                                      {group.members_count.toLocaleString()} عضو • {group.type}
+                                      {group.username && ` • @${group.username}`}
+                                    </div>
+                                  </div>
+                                </label>
+                              )
+                            })}
+                            
+                            {/* المجموعات المضافة يدوياً (IDs) */}
+                            {manualGroupIds.map((groupId) => {
+                              if (formData.selected_groups.includes(groupId)) {
+                                const foundGroup = groups.find(g => {
+                                  const gId = g.group_id || g.telegram_group_id || Number(g.id)
+                                  return gId === groupId
+                                })
+                                
+                                if (!foundGroup) {
+                                  // مجموعة مضافة يدوياً (غير موجودة في القائمة)
+                                  return (
+                                    <div
+                                      key={`manual-${groupId}`}
+                                      className="flex items-center justify-between p-3 rounded-lg bg-blue-50 border border-blue-200"
+                                    >
+                                      <div className="flex items-center gap-3">
+                                        <input
+                                          type="checkbox"
+                                          checked={true}
+                                          onChange={(e) => {
+                                            if (!e.target.checked) {
+                                              setFormData({
+                                                ...formData,
+                                                selected_groups: formData.selected_groups.filter(id => id !== groupId)
+                                              })
+                                              setManualGroupIds(manualGroupIds.filter(id => id !== groupId))
+                                            }
+                                          }}
+                                          className="w-5 h-5 text-orange-600 rounded"
+                                        />
+                                        <div>
+                                          <div className="font-medium text-gray-900">ID: {groupId}</div>
+                                          <div className="text-xs text-blue-600">مضاف يدوياً</div>
+                                        </div>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setFormData({
+                                            ...formData,
+                                            selected_groups: formData.selected_groups.filter(id => id !== groupId)
+                                          })
+                                          setManualGroupIds(manualGroupIds.filter(id => id !== groupId))
+                                        }}
+                                        className="text-red-600 hover:text-red-700"
+                                      >
+                                        <X className="w-4 h-4" />
+                                      </button>
+                                    </div>
+                                  )
+                                }
+                              }
+                              return null
+                            })}
+                            
+                            {/* المجموعات المضافة يدوياً (Usernames) */}
+                            {formData.selected_group_usernames.map((username) => (
+                              <div
+                                key={`manual-username-${username}`}
+                                className="flex items-center justify-between p-3 rounded-lg bg-purple-50 border border-purple-200"
+                              >
+                                <div className="flex items-center gap-3">
+                                  <input
+                                    type="checkbox"
+                                    checked={true}
+                                    onChange={(e) => {
+                                      if (!e.target.checked) {
+                                        setFormData({
+                                          ...formData,
+                                          selected_group_usernames: formData.selected_group_usernames.filter(u => u !== username)
+                                        })
+                                      }
+                                    }}
+                                    className="w-5 h-5 text-orange-600 rounded"
+                                  />
+                                  <div>
+                                    <div className="font-medium text-gray-900">@{username}</div>
+                                    <div className="text-xs text-purple-600">username مضاف يدوياً</div>
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setFormData({
+                                      ...formData,
+                                      selected_group_usernames: formData.selected_group_usernames.filter(u => u !== username)
+                                    })
+                                  }}
+                                  className="text-red-600 hover:text-red-700"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
                               </div>
-                            </div>
-                          </label>
-                        ))
-                      )}
+                            ))}
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
 
-                {/* Members Selection - Placeholder for now */}
-                {(formData.target_type === 'members' || formData.target_type === 'both') && (
-                  <div>
-                    <label className="block text-sm font-bold text-gray-700 mb-2">
-                      اختر الأعضاء ({formData.selected_members.length} محدد) *
-                    </label>
-                    <div className="border-2 border-gray-200 rounded-xl p-4 text-center">
-                      <p className="text-gray-500 text-sm">سيتم إضافة اختيار الأعضاء قريباً</p>
+                {/* Members Selection */}
+                {(formData.campaign_type === 'members' || 
+                  (formData.campaign_type === 'mixed' && (formData.target_type === 'members' || formData.target_type === 'both'))) && (
+                  <div className="space-y-4">
+                    {/* إدخال usernames يدوياً */}
+                    <div>
+                      <label className="block text-sm font-bold text-gray-700 mb-2">
+                        إضافة أعضاء يدوياً (usernames أو IDs)
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={manualMemberUsernames}
+                          onChange={(e) => setManualMemberUsernames(e.target.value)}
+                          placeholder="مثال: @user1 @user2 أو 123456789 -123456789"
+                          className="flex-1 px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!manualMemberUsernames.trim()) return
+                            
+                            setError('')
+                            const inputs = manualMemberUsernames.trim().split(/\s+/)
+                            const newIds: number[] = []
+                            const unresolvedUsernames: string[] = []
+                            
+                            for (const input of inputs) {
+                              // إزالة @ إذا كان موجوداً
+                              const cleanInput = input.replace(/^@/, '').trim()
+                              
+                              // محاولة التحويل إلى رقم (ID)
+                              const numId = Number(cleanInput)
+                              if (!isNaN(numId) && numId !== 0) {
+                                newIds.push(numId)
+                              } else if (cleanInput) {
+                                // البحث في الأعضاء المحملين أولاً
+                                const foundMember = members.find(m => {
+                                  const mUsername = m.username?.toLowerCase().replace('@', '')
+                                  return mUsername === cleanInput.toLowerCase()
+                                })
+                                
+                                if (foundMember) {
+                                  newIds.push(foundMember.telegram_user_id)
+                                } else {
+                                  // إذا لم نجدها، نحفظ username (سيتم إرسالها كـ username)
+                                  unresolvedUsernames.push(cleanInput)
+                                  // يمكن إضافة Edge Function لحل usernames لاحقاً
+                                }
+                              }
+                            }
+                            
+                            if (newIds.length > 0 || unresolvedUsernames.length > 0) {
+                              // حساب uniqueIds و uniqueUsernames
+                              let uniqueIds = [...formData.selected_members]
+                              let uniqueUsernames = [...formData.selected_member_usernames]
+                              
+                              // إضافة IDs المباشرة
+                              if (newIds.length > 0) {
+                                uniqueIds = [...new Set([...formData.selected_members, ...newIds])]
+                                setManualMemberIds([...new Set([...manualMemberIds, ...newIds])])
+                              }
+                              
+                              // حفظ usernames غير المحلولة
+                              if (unresolvedUsernames.length > 0) {
+                                uniqueUsernames = [...new Set([...formData.selected_member_usernames, ...unresolvedUsernames])]
+                              }
+                              
+                              // تحديث formData مرة واحدة
+                              setFormData({
+                                ...formData,
+                                selected_members: uniqueIds,
+                                selected_member_usernames: uniqueUsernames
+                              })
+                              
+                              // رسالة النجاح
+                              if (unresolvedUsernames.length > 0 && newIds.length > 0) {
+                                setSuccess(`تم إضافة ${newIds.length} عضو و ${unresolvedUsernames.length} username`)
+                              } else if (unresolvedUsernames.length > 0) {
+                                setSuccess(`تم إضافة ${unresolvedUsernames.length} username`)
+                              } else {
+                                setSuccess(`تم إضافة ${newIds.length} عضو بنجاح`)
+                              }
+                              
+                              setManualMemberUsernames('')
+                              
+                              // إخفاء رسالة النجاح بعد 3 ثواني
+                              setTimeout(() => setSuccess(''), 3000)
+                            } else {
+                              setError('لم يتم العثور على أي عضو. تأكد من صحة الـ IDs أو usernames')
+                            }
+                          }}
+                          className="px-6 py-3 bg-orange-600 text-white rounded-xl font-medium hover:bg-orange-700 transition-colors"
+                        >
+                          إضافة
+                        </button>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        يمكنك إدخال usernames مثل @user1 أو IDs مثل 123456789 (مفصولة بمسافات)
+                      </p>
                     </div>
+
+                    {/* اختيار المجموعة لجلب أعضائها */}
+                    <div>
+                      <label className="block text-sm font-bold text-gray-700 mb-2">
+                        أو اختر مجموعة لاستخراج الأعضاء منها
+                      </label>
+                      <select
+                        value={selectedGroupForMembers}
+                        onChange={(e) => {
+                          setSelectedGroupForMembers(e.target.value)
+                          if (e.target.value) {
+                            fetchMembersFromGroup(e.target.value)
+                          } else {
+                            setMembers([])
+                            setFilteredMembers([])
+                          }
+                        }}
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                      >
+                        <option value="">-- اختر مجموعة --</option>
+                        {groups.map((group) => {
+                          const groupId = group.group_id || group.telegram_group_id || Number(group.id)
+                          return (
+                            <option key={group.id} value={groupId}>
+                              {group.title} ({group.members_count.toLocaleString()} عضو)
+                            </option>
+                          )
+                        })}
+                      </select>
+                    </div>
+
+                    {/* قائمة الأعضاء */}
+                    {(selectedGroupForMembers || manualMemberIds.length > 0) && (
+                      <div>
+                        <label className="block text-sm font-bold text-gray-700 mb-2">
+                          الأعضاء المحددون ({formData.selected_members.length + formData.selected_member_usernames.length} محدد) *
+                        </label>
+                        
+                        {/* الأعضاء المضافة يدوياً (IDs) */}
+                        {manualMemberIds.length > 0 && manualMemberIds.some(id => formData.selected_members.includes(id)) && (
+                          <div className="mb-4 space-y-2">
+                            {manualMemberIds.map((memberId) => {
+                              if (formData.selected_members.includes(memberId)) {
+                                const foundMember = members.find(m => m.telegram_user_id === memberId)
+                                
+                                if (!foundMember) {
+                                  // عضو مضافة يدوياً (غير موجود في القائمة)
+                                  return (
+                                    <div
+                                      key={`manual-member-${memberId}`}
+                                      className="flex items-center justify-between p-3 rounded-lg bg-blue-50 border border-blue-200"
+                                    >
+                                      <div className="flex items-center gap-3">
+                                        <input
+                                          type="checkbox"
+                                          checked={true}
+                                          onChange={(e) => {
+                                            if (!e.target.checked) {
+                                              setFormData({
+                                                ...formData,
+                                                selected_members: formData.selected_members.filter(id => id !== memberId)
+                                              })
+                                              setManualMemberIds(manualMemberIds.filter(id => id !== memberId))
+                                            }
+                                          }}
+                                          className="w-5 h-5 text-orange-600 rounded"
+                                        />
+                                        <div>
+                                          <div className="font-medium text-gray-900">ID: {memberId}</div>
+                                          <div className="text-xs text-blue-600">مضاف يدوياً</div>
+                                        </div>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setFormData({
+                                            ...formData,
+                                            selected_members: formData.selected_members.filter(id => id !== memberId)
+                                          })
+                                          setManualMemberIds(manualMemberIds.filter(id => id !== memberId))
+                                        }}
+                                        className="text-red-600 hover:text-red-700"
+                                      >
+                                        <X className="w-4 h-4" />
+                                      </button>
+                                    </div>
+                                  )
+                                }
+                              }
+                              return null
+                            })}
+                          </div>
+                        )}
+                        
+                        {/* الأعضاء المضافة يدوياً (Usernames) */}
+                        {formData.selected_member_usernames.length > 0 && (
+                          <div className="mb-4 space-y-2">
+                            {formData.selected_member_usernames.map((username) => (
+                              <div
+                                key={`manual-member-username-${username}`}
+                                className="flex items-center justify-between p-3 rounded-lg bg-purple-50 border border-purple-200"
+                              >
+                                <div className="flex items-center gap-3">
+                                  <input
+                                    type="checkbox"
+                                    checked={true}
+                                    onChange={(e) => {
+                                      if (!e.target.checked) {
+                                        setFormData({
+                                          ...formData,
+                                          selected_member_usernames: formData.selected_member_usernames.filter(u => u !== username)
+                                        })
+                                      }
+                                    }}
+                                    className="w-5 h-5 text-orange-600 rounded"
+                                  />
+                                  <div>
+                                    <div className="font-medium text-gray-900">@{username}</div>
+                                    <div className="text-xs text-purple-600">username مضاف يدوياً</div>
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setFormData({
+                                      ...formData,
+                                      selected_member_usernames: formData.selected_member_usernames.filter(u => u !== username)
+                                    })
+                                  }}
+                                  className="text-red-600 hover:text-red-700"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        
+                        {/* قائمة الأعضاء من المجموعة */}
+                        {selectedGroupForMembers && (
+                          <div>
+                            {loadingMembers ? (
+                              <div className="border-2 border-gray-200 rounded-xl p-8 text-center">
+                                <Loader2 className="w-8 h-8 text-orange-600 animate-spin mx-auto mb-2" />
+                                <p className="text-gray-500 text-sm">جاري جلب الأعضاء...</p>
+                              </div>
+                            ) : filteredMembers.length === 0 ? (
+                              <div className="border-2 border-gray-200 rounded-xl p-4 text-center">
+                                <p className="text-gray-500 text-sm">
+                                  لا توجد أعضاء في هذه المجموعة. استخرج الأعضاء أولاً من صفحة استخراج الأعضاء.
+                                </p>
+                              </div>
+                            ) : (
+                              <div className="max-h-64 overflow-y-auto border-2 border-gray-200 rounded-xl p-3 space-y-2">
+                                {/* زر تحديد الكل */}
+                                <div className="flex items-center justify-between p-2 border-b border-gray-200 mb-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (formData.selected_members.length === filteredMembers.length) {
+                                        setFormData({ ...formData, selected_members: [] })
+                                      } else {
+                                        setFormData({ 
+                                          ...formData, 
+                                          selected_members: filteredMembers.map(m => m.telegram_user_id)
+                                        })
+                                      }
+                                    }}
+                                    className="text-sm text-orange-600 hover:text-orange-700 font-medium"
+                                  >
+                                    {formData.selected_members.length === filteredMembers.length ? 'إلغاء تحديد الكل' : 'تحديد الكل'}
+                                  </button>
+                                  <span className="text-xs text-gray-500">
+                                    {filteredMembers.length} عضو متاح
+                                  </span>
+                                </div>
+                                
+                                {filteredMembers.map((member) => (
+                                  <label
+                                    key={member.id}
+                                    className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 cursor-pointer"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={formData.selected_members.includes(member.telegram_user_id)}
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          setFormData({
+                                            ...formData,
+                                            selected_members: [...formData.selected_members, member.telegram_user_id]
+                                          })
+                                        } else {
+                                          setFormData({
+                                            ...formData,
+                                            selected_members: formData.selected_members.filter(id => id !== member.telegram_user_id)
+                                          })
+                                        }
+                                      }}
+                                      className="w-5 h-5 text-orange-600 rounded"
+                                    />
+                                    <div className="flex-1">
+                                      <div className="font-medium text-gray-900">
+                                        {member.first_name || member.username || 'بدون اسم'}
+                                        {member.last_name && ` ${member.last_name}`}
+                                        {member.is_bot && <span className="text-xs text-blue-600 mr-2">(بوت)</span>}
+                                        {member.is_premium && <span className="text-xs text-yellow-600 mr-2">(Premium)</span>}
+                                      </div>
+                                      <div className="text-xs text-gray-500">
+                                        {member.username && `@${member.username} • `}
+                                        ID: {member.telegram_user_id}
+                                      </div>
+                                    </div>
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -833,110 +1763,287 @@ export default function CampaignsPage() {
                 </div>
               </div>
 
-              {/* Advanced Settings - Collapsible */}
+              {/* Advanced Settings - Different for Groups vs Members */}
               <div className="space-y-4">
-                <h4 className="text-lg font-bold text-gray-900 border-b pb-2">إعدادات متقدمة</h4>
+                <h4 className="text-lg font-bold text-gray-900 border-b pb-2">
+                  {formData.campaign_type === 'groups' ? 'إعدادات المجموعات' : 
+                   formData.campaign_type === 'members' ? 'إعدادات الأعضاء' : 
+                   'إعدادات متقدمة'}
+                </h4>
                 
-                {/* Delay Settings */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-bold text-gray-700 mb-2">
-                      الحد الأدنى للتأخير (ثانية)
-                    </label>
-                    <input
-                      type="number"
-                      value={formData.delay_between_messages_min}
-                      onChange={(e) => setFormData({ ...formData, delay_between_messages_min: parseInt(e.target.value) || 30 })}
-                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
-                    />
+                {/* Settings specific to Groups - Only show when campaign_type is groups */}
+                {formData.campaign_type === 'groups' && (
+                  <div className="bg-green-50 border-2 border-green-200 rounded-xl p-4 space-y-3">
+                    <h5 className="font-bold text-green-900">إعدادات خاصة بالمجموعات</h5>
+                    
+                    {/* Delay Settings for Groups */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-bold text-gray-700 mb-2">
+                          التأخير بين المجموعات (ثانية)
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={formData.delay_between_messages_min}
+                          onChange={(e) => setFormData({ ...formData, delay_between_messages_min: parseInt(e.target.value) || 30 })}
+                          className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">التأخير بين إرسال رسالة لكل مجموعة</p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-bold text-gray-700 mb-2">
+                          الحد الأقصى للتأخير (ثانية)
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={formData.delay_between_messages_max}
+                          onChange={(e) => setFormData({ ...formData, delay_between_messages_max: parseInt(e.target.value) || 90 })}
+                          className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">الحد الأقصى للتأخير بين المجموعات</p>
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-bold text-gray-700 mb-2">
+                        عدد الرسائل لكل مجموعة
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        value="1"
+                        disabled
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl bg-gray-100 cursor-not-allowed"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">رسالة واحدة لكل مجموعة (افتراضي)</p>
+                    </div>
+                    
+                    {/* Message Options for Groups */}
+                    <div className="space-y-2">
+                      <label className="block text-sm font-bold text-gray-700 mb-2">خيارات الرسائل</label>
+                      <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formData.vary_emojis}
+                          onChange={(e) => setFormData({ ...formData, vary_emojis: e.target.checked })}
+                          className="w-4 h-4 text-orange-600 rounded"
+                        />
+                        <span className="text-sm text-gray-700">تنويع الإيموجي</span>
+                      </label>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-sm font-bold text-gray-700 mb-2">
-                      الحد الأقصى للتأخير (ثانية)
-                    </label>
-                    <input
-                      type="number"
-                      value={formData.delay_between_messages_max}
-                      onChange={(e) => setFormData({ ...formData, delay_between_messages_max: parseInt(e.target.value) || 90 })}
-                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
-                    />
-                  </div>
-                </div>
+                )}
 
-                {/* Filters */}
-                <div className="space-y-2">
-                  <label className="block text-sm font-bold text-gray-700 mb-2">خيارات الاستبعاد</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={formData.exclude_sent_members}
-                        onChange={(e) => setFormData({ ...formData, exclude_sent_members: e.target.checked })}
-                        className="w-4 h-4 text-orange-600 rounded"
-                      />
-                      <span className="text-sm text-gray-700">استبعاد المرسل لهم سابقاً</span>
-                    </label>
-                    <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={formData.exclude_bots}
-                        onChange={(e) => setFormData({ ...formData, exclude_bots: e.target.checked })}
-                        className="w-4 h-4 text-orange-600 rounded"
-                      />
-                      <span className="text-sm text-gray-700">استبعاد البوتات</span>
-                    </label>
-                    <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={formData.exclude_premium}
-                        onChange={(e) => setFormData({ ...formData, exclude_premium: e.target.checked })}
-                        className="w-4 h-4 text-orange-600 rounded"
-                      />
-                      <span className="text-sm text-gray-700">استبعاد Premium</span>
-                    </label>
-                    <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={formData.exclude_scam}
-                        onChange={(e) => setFormData({ ...formData, exclude_scam: e.target.checked })}
-                        className="w-4 h-4 text-orange-600 rounded"
-                      />
-                      <span className="text-sm text-gray-700">استبعاد Scam</span>
-                    </label>
-                    <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={formData.exclude_fake}
-                        onChange={(e) => setFormData({ ...formData, exclude_fake: e.target.checked })}
-                        className="w-4 h-4 text-orange-600 rounded"
-                      />
-                      <span className="text-sm text-gray-700">استبعاد Fake</span>
-                    </label>
-                  </div>
-                </div>
+                {/* Settings specific to Members - Only show when campaign_type is members */}
+                {formData.campaign_type === 'members' && (
+                  <>
+                    <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4 space-y-3">
+                      <h5 className="font-bold text-blue-900">إعدادات خاصة بالأعضاء</h5>
+                      
+                      {/* Delay Settings for Members */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-bold text-gray-700 mb-2">
+                            التأخير بين الأعضاء (ثانية)
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={formData.delay_between_messages_min}
+                            onChange={(e) => setFormData({ ...formData, delay_between_messages_min: parseInt(e.target.value) || 30 })}
+                            className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                          />
+                          <p className="text-xs text-gray-500 mt-1">التأخير بين إرسال رسالة لكل عضو (مهم لتجنب الحظر)</p>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-gray-700 mb-2">
+                            الحد الأقصى للتأخير (ثانية)
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={formData.delay_between_messages_max}
+                            onChange={(e) => setFormData({ ...formData, delay_between_messages_max: parseInt(e.target.value) || 90 })}
+                            className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                          />
+                          <p className="text-xs text-gray-500 mt-1">يُنصح بـ 30-90 ثانية للأعضاء</p>
+                        </div>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-bold text-gray-700 mb-2">
+                            عدد الأعضاء في كل دفعة
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="50"
+                            value={formData.max_messages_per_session}
+                            onChange={(e) => setFormData({ ...formData, max_messages_per_session: parseInt(e.target.value) || 10 })}
+                            className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                          />
+                          <p className="text-xs text-gray-500 mt-1">عدد الرسائل في كل دفعة إرسال (يُنصح بـ 10-20)</p>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-gray-700 mb-2">
+                            الحد الأقصى يومياً
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={formData.max_messages_per_day}
+                            onChange={(e) => setFormData({ ...formData, max_messages_per_day: parseInt(e.target.value) || 200 })}
+                            className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                          />
+                          <p className="text-xs text-gray-500 mt-1">الحد الأقصى لعدد الرسائل في اليوم</p>
+                        </div>
+                      </div>
+                    </div>
 
-                {/* Message Options */}
-                <div className="space-y-2">
-                  <label className="block text-sm font-bold text-gray-700 mb-2">خيارات الرسائل</label>
-                  <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={formData.personalize_messages}
-                      onChange={(e) => setFormData({ ...formData, personalize_messages: e.target.checked })}
-                      className="w-4 h-4 text-orange-600 rounded"
-                    />
-                    <span className="text-sm text-gray-700">تخصيص الرسائل بالاسم</span>
-                  </label>
-                  <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={formData.vary_emojis}
-                      onChange={(e) => setFormData({ ...formData, vary_emojis: e.target.checked })}
-                      className="w-4 h-4 text-orange-600 rounded"
-                    />
-                    <span className="text-sm text-gray-700">تنويع الإيموجي</span>
-                  </label>
-                </div>
+                    {/* Filters - Only for Members */}
+                    <div className="space-y-2">
+                      <label className="block text-sm font-bold text-gray-700 mb-2">خيارات الاستبعاد (للأعضاء فقط)</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={formData.exclude_sent_members}
+                            onChange={(e) => setFormData({ ...formData, exclude_sent_members: e.target.checked })}
+                            className="w-4 h-4 text-orange-600 rounded"
+                          />
+                          <span className="text-sm text-gray-700">استبعاد المرسل لهم سابقاً</span>
+                        </label>
+                        <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={formData.exclude_bots}
+                            onChange={(e) => setFormData({ ...formData, exclude_bots: e.target.checked })}
+                            className="w-4 h-4 text-orange-600 rounded"
+                          />
+                          <span className="text-sm text-gray-700">استبعاد البوتات</span>
+                        </label>
+                        <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={formData.exclude_premium}
+                            onChange={(e) => setFormData({ ...formData, exclude_premium: e.target.checked })}
+                            className="w-4 h-4 text-orange-600 rounded"
+                          />
+                          <span className="text-sm text-gray-700">استبعاد Premium</span>
+                        </label>
+                        <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={formData.exclude_verified}
+                            onChange={(e) => setFormData({ ...formData, exclude_verified: e.target.checked })}
+                            className="w-4 h-4 text-orange-600 rounded"
+                          />
+                          <span className="text-sm text-gray-700">استبعاد Verified</span>
+                        </label>
+                        <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={formData.exclude_scam}
+                            onChange={(e) => setFormData({ ...formData, exclude_scam: e.target.checked })}
+                            className="w-4 h-4 text-orange-600 rounded"
+                          />
+                          <span className="text-sm text-gray-700">استبعاد Scam</span>
+                        </label>
+                        <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={formData.exclude_fake}
+                            onChange={(e) => setFormData({ ...formData, exclude_fake: e.target.checked })}
+                            className="w-4 h-4 text-orange-600 rounded"
+                          />
+                          <span className="text-sm text-gray-700">استبعاد Fake</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Message Options for Members */}
+                    <div className="space-y-2">
+                      <label className="block text-sm font-bold text-gray-700 mb-2">خيارات الرسائل</label>
+                      <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formData.personalize_messages}
+                          onChange={(e) => setFormData({ ...formData, personalize_messages: e.target.checked })}
+                          className="w-4 h-4 text-orange-600 rounded"
+                        />
+                        <span className="text-sm text-gray-700">تخصيص الرسائل بالاسم</span>
+                      </label>
+                      <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formData.vary_emojis}
+                          onChange={(e) => setFormData({ ...formData, vary_emojis: e.target.checked })}
+                          className="w-4 h-4 text-orange-600 rounded"
+                        />
+                        <span className="text-sm text-gray-700">تنويع الإيموجي</span>
+                      </label>
+                    </div>
+                  </>
+                )}
+
+                {/* Settings for Mixed Campaigns */}
+                {formData.campaign_type === 'mixed' && (
+                  <>
+                    {/* Delay Settings - Always shown for mixed */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-bold text-gray-700 mb-2">
+                          الحد الأدنى للتأخير (ثانية)
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={formData.delay_between_messages_min}
+                          onChange={(e) => setFormData({ ...formData, delay_between_messages_min: parseInt(e.target.value) || 30 })}
+                          className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-bold text-gray-700 mb-2">
+                          الحد الأقصى للتأخير (ثانية)
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={formData.delay_between_messages_max}
+                          onChange={(e) => setFormData({ ...formData, delay_between_messages_max: parseInt(e.target.value) || 90 })}
+                          className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Message Options for Mixed */}
+                    <div className="space-y-2">
+                      <label className="block text-sm font-bold text-gray-700 mb-2">خيارات الرسائل</label>
+                      <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formData.personalize_messages}
+                          onChange={(e) => setFormData({ ...formData, personalize_messages: e.target.checked })}
+                          className="w-4 h-4 text-orange-600 rounded"
+                        />
+                        <span className="text-sm text-gray-700">تخصيص الرسائل بالاسم (للأعضاء فقط)</span>
+                      </label>
+                      <label className="flex items-center gap-2 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formData.vary_emojis}
+                          onChange={(e) => setFormData({ ...formData, vary_emojis: e.target.checked })}
+                          className="w-4 h-4 text-orange-600 rounded"
+                        />
+                        <span className="text-sm text-gray-700">تنويع الإيموجي</span>
+                      </label>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Schedule */}

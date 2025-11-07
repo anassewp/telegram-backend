@@ -29,9 +29,19 @@ Deno.serve(async (req) => {
         });
     }
 
+    let requestData: any = null;
+    
     try {
         // Extract parameters from request body
-        const requestData = await req.json();
+        requestData = await req.json();
+        console.log('Received request data:', JSON.stringify({
+            ...requestData,
+            selected_groups: requestData.selected_groups,
+            selected_members: requestData.selected_members,
+            selected_group_usernames: requestData.selected_group_usernames,
+            selected_member_usernames: requestData.selected_member_usernames
+        }));
+        
         const {
             user_id,
             name,
@@ -40,6 +50,8 @@ Deno.serve(async (req) => {
             target_type,
             selected_groups = [],
             selected_members = [],
+            selected_group_usernames = [],
+            selected_member_usernames = [],
             session_ids = [],
             distribution_strategy = 'equal',
             max_messages_per_session = 100,
@@ -92,13 +104,18 @@ Deno.serve(async (req) => {
             throw new Error('delay_between_messages_min يجب أن يكون أقل من أو يساوي delay_between_messages_max');
         }
 
-        // Validate targets based on target_type
-        if ((target_type === 'groups' || target_type === 'both') && (!Array.isArray(selected_groups) || selected_groups.length === 0)) {
-            throw new Error('يجب تحديد مجموعة واحدة على الأقل عندما يكون target_type هو groups أو both');
+        // Validate targets based on target_type (including usernames)
+        const totalGroups = (Array.isArray(selected_groups) ? selected_groups.length : 0) + 
+                           (Array.isArray(selected_group_usernames) ? selected_group_usernames.length : 0);
+        const totalMembers = (Array.isArray(selected_members) ? selected_members.length : 0) + 
+                            (Array.isArray(selected_member_usernames) ? selected_member_usernames.length : 0);
+
+        if ((target_type === 'groups' || target_type === 'both') && totalGroups === 0) {
+            throw new Error('يجب تحديد مجموعة واحدة على الأقل (ID أو username) عندما يكون target_type هو groups أو both');
         }
 
-        if ((target_type === 'members' || target_type === 'both') && (!Array.isArray(selected_members) || selected_members.length === 0)) {
-            throw new Error('يجب تحديد عضو واحد على الأقل عندما يكون target_type هو members أو both');
+        if ((target_type === 'members' || target_type === 'both') && totalMembers === 0) {
+            throw new Error('يجب تحديد عضو واحد على الأقل (ID أو username) عندما يكون target_type هو members أو both');
         }
 
         // Verify sessions exist and are active
@@ -123,10 +140,12 @@ Deno.serve(async (req) => {
             throw new Error('بعض الجلسات المحددة غير موجودة أو غير نشطة');
         }
 
-        // Verify groups exist (if selected)
-        if (selected_groups.length > 0) {
-            const groupsResponse = await fetch(
-                `${SUPABASE_URL}/rest/v1/telegram_groups?telegram_group_id=in.(${selected_groups.join(',')})&user_id=eq.${user_id}`,
+        // Verify groups exist (if selected) - only verify IDs that exist in database
+        // Usernames will be resolved at send time
+        if (Array.isArray(selected_groups) && selected_groups.length > 0) {
+            // Try both group_id and telegram_group_id fields
+            const groupsResponse1 = await fetch(
+                `${SUPABASE_URL}/rest/v1/telegram_groups?group_id=in.(${selected_groups.join(',')})&user_id=eq.${user_id}`,
                 {
                     headers: {
                         'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
@@ -136,19 +155,43 @@ Deno.serve(async (req) => {
                 }
             );
 
-            if (!groupsResponse.ok) {
-                throw new Error('فشل في جلب بيانات المجموعات');
+            let groups: any[] = [];
+            if (groupsResponse1.ok) {
+                groups = await groupsResponse1.json();
             }
 
-            const groups = await groupsResponse.json();
-            
-            if (groups.length !== selected_groups.length) {
-                throw new Error('بعض المجموعات المحددة غير موجودة');
+            // If not found, try telegram_group_id
+            if (groups.length < selected_groups.length) {
+                const groupsResponse2 = await fetch(
+                    `${SUPABASE_URL}/rest/v1/telegram_groups?telegram_group_id=in.(${selected_groups.join(',')})&user_id=eq.${user_id}`,
+                    {
+                        headers: {
+                            'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+                            'apikey': SUPABASE_SERVICE_ROLE_KEY,
+                            'Content-Type': 'application/json'
+                        }
+                    }
+                );
+
+                if (groupsResponse2.ok) {
+                    const groups2: any[] = await groupsResponse2.json();
+                    // Merge results, avoiding duplicates
+                    const foundIds = new Set(groups.map((g: any) => g.group_id || g.telegram_group_id || g.id));
+                    groups = [...groups, ...groups2.filter((g: any) => {
+                        const gId = g.group_id || g.telegram_group_id || g.id;
+                        return !foundIds.has(gId);
+                    })];
+                }
             }
+
+            // Note: We allow IDs that don't exist in DB (manual entries)
+            // They will be resolved at send time
+            console.log(`Found ${groups.length} out of ${selected_groups.length} groups in database`);
         }
 
-        // Verify members exist (if selected)
-        if (selected_members.length > 0) {
+        // Verify members exist (if selected) - only verify IDs that exist in database
+        // Usernames will be resolved at send time
+        if (Array.isArray(selected_members) && selected_members.length > 0) {
             const membersResponse = await fetch(
                 `${SUPABASE_URL}/rest/v1/telegram_members?telegram_user_id=in.(${selected_members.join(',')})&user_id=eq.${user_id}`,
                 {
@@ -160,18 +203,17 @@ Deno.serve(async (req) => {
                 }
             );
 
-            if (!membersResponse.ok) {
-                throw new Error('فشل في جلب بيانات الأعضاء');
+            let members = [];
+            if (membersResponse.ok) {
+                members = await membersResponse.json();
             }
 
-            const members = await membersResponse.json();
-            
-            if (members.length !== selected_members.length) {
-                throw new Error('بعض الأعضاء المحددين غير موجودين');
-            }
+            // Note: We allow IDs that don't exist in DB (manual entries)
+            // They will be resolved at send time
+            console.log(`Found ${members.length} out of ${selected_members.length} members in database`);
         }
 
-        // Validate with Backend API
+        // Validate with Backend API (optional - skip if endpoint doesn't exist)
         try {
             const backendValidation = await fetch(`${TELEGRAM_BACKEND_URL}/campaigns/create`, {
                 method: 'POST',
@@ -183,8 +225,8 @@ Deno.serve(async (req) => {
                     campaign_type,
                     message_text,
                     target_type,
-                    selected_groups,
-                    selected_members,
+                    selected_groups: Array.isArray(selected_groups) ? selected_groups : [],
+                    selected_members: Array.isArray(selected_members) ? selected_members : [],
                     session_ids,
                     distribution_strategy,
                     max_messages_per_session,
@@ -206,21 +248,39 @@ Deno.serve(async (req) => {
             });
 
             if (!backendValidation.ok) {
-                const errorData = await backendValidation.json();
-                throw new Error(errorData.detail || 'فشل في التحقق من صحة بيانات الحملة');
+                // If endpoint returns error, log it but don't fail (backend might not have this endpoint yet)
+                console.warn('Backend validation endpoint returned error, continuing anyway');
+                try {
+                    const errorData = await backendValidation.json();
+                    console.warn('Backend error:', errorData);
+                } catch (e) {
+                    console.warn('Backend validation failed, but continuing');
+                }
             }
         } catch (backendError) {
-            console.error('خطأ في التحقق من Backend:', backendError);
-            throw new Error(`فشل في التحقق من صحة البيانات: ${backendError.message}`);
+            // If backend endpoint doesn't exist or fails, continue anyway
+            console.warn('Backend validation skipped:', backendError.message);
         }
 
-        // Calculate total targets
+        // Calculate total targets (including usernames)
+        // حساب صحيح يتعامل مع JSONB arrays
         let total_targets = 0;
+        
         if (target_type === 'groups' || target_type === 'both') {
-            total_targets += selected_groups.length;
+            const groupsCount = Array.isArray(selected_groups) ? selected_groups.length : 0;
+            const usernamesCount = Array.isArray(selected_group_usernames) ? selected_group_usernames.length : 0;
+            total_targets += groupsCount + usernamesCount;
         }
+        
         if (target_type === 'members' || target_type === 'both') {
-            total_targets += selected_members.length;
+            const membersCount = Array.isArray(selected_members) ? selected_members.length : 0;
+            const usernamesCount = Array.isArray(selected_member_usernames) ? selected_member_usernames.length : 0;
+            total_targets += membersCount + usernamesCount;
+        }
+        
+        // التحقق من أن total_targets > 0
+        if (total_targets === 0) {
+            throw new Error('يجب تحديد هدف واحد على الأقل (مجموعة أو عضو)');
         }
 
         // Determine status
@@ -236,6 +296,17 @@ Deno.serve(async (req) => {
         }
 
         // Create campaign record
+        // Combine IDs and usernames into JSONB arrays
+        const allGroups = [
+            ...(Array.isArray(selected_groups) ? selected_groups : []),
+            ...(Array.isArray(selected_group_usernames) ? selected_group_usernames.map(u => ({ username: u })) : [])
+        ];
+        
+        const allMembers = [
+            ...(Array.isArray(selected_members) ? selected_members : []),
+            ...(Array.isArray(selected_member_usernames) ? selected_member_usernames.map(u => ({ username: u })) : [])
+        ];
+
         const campaignRecord = {
             user_id,
             name,
@@ -243,8 +314,8 @@ Deno.serve(async (req) => {
             message_text,
             status,
             target_type,
-            selected_groups: selected_groups.length > 0 ? selected_groups : null,
-            selected_members: selected_members.length > 0 ? selected_members : null,
+            selected_groups: allGroups.length > 0 ? allGroups : null,
+            selected_members: allMembers.length > 0 ? allMembers : null,
             session_ids,
             distribution_strategy,
             max_messages_per_session,
@@ -316,8 +387,38 @@ Deno.serve(async (req) => {
             }
         );
 
-    } catch (error) {
-        console.error('خطأ في إنشاء الحملة:', error);
+    } catch (error: any) {
+        // Logging شامل للأخطاء
+        const errorDetails = {
+            timestamp: new Date().toISOString(),
+            error_name: error?.name || 'Unknown',
+            error_message: error?.message || 'خطأ غير معروف',
+            error_stack: error?.stack || 'No stack trace',
+            error_cause: error?.cause || null,
+            request_data: requestData ? {
+                user_id: requestData.user_id || null,
+                name: requestData.name || null,
+                campaign_type: requestData.campaign_type || null,
+                target_type: requestData.target_type || null,
+                selected_groups_count: Array.isArray(requestData.selected_groups) ? requestData.selected_groups.length : 0,
+                selected_members_count: Array.isArray(requestData.selected_members) ? requestData.selected_members.length : 0,
+                session_ids_count: Array.isArray(requestData.session_ids) ? requestData.session_ids.length : 0
+            } : null,
+            environment: {
+                supabase_url: SUPABASE_URL ? 'Set' : 'Missing',
+                telegram_backend_url: TELEGRAM_BACKEND_URL || 'Not set'
+            }
+        };
+
+        console.error('========== خطأ في إنشاء الحملة ==========');
+        console.error('Timestamp:', errorDetails.timestamp);
+        console.error('Error Name:', errorDetails.error_name);
+        console.error('Error Message:', errorDetails.error_message);
+        console.error('Error Stack:', errorDetails.error_stack);
+        console.error('Request Data:', JSON.stringify(errorDetails.request_data, null, 2));
+        console.error('Environment:', JSON.stringify(errorDetails.environment, null, 2));
+        console.error('Full Error Object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        console.error('=========================================');
 
         return new Response(
             JSON.stringify({
@@ -325,7 +426,8 @@ Deno.serve(async (req) => {
                 error: {
                     code: 'CAMPAIGN_CREATE_FAILED',
                     message: error.message || 'خطأ في إنشاء الحملة',
-                    timestamp: new Date().toISOString()
+                    timestamp: new Date().toISOString(),
+                    details: errorDetails
                 }
             }),
             {

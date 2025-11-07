@@ -160,8 +160,33 @@ Deno.serve(async (req) => {
             }
         );
 
-    } catch (error) {
-        console.error('خطأ في بدء الحملة:', error);
+    } catch (error: any) {
+        // Logging شامل للأخطاء
+        const errorDetails = {
+            timestamp: new Date().toISOString(),
+            error_name: error?.name || 'Unknown',
+            error_message: error?.message || 'خطأ غير معروف',
+            error_stack: error?.stack || 'No stack trace',
+            error_cause: error?.cause || null,
+            request_data: {
+                campaign_id: requestData?.campaign_id || null,
+                user_id: requestData?.user_id || null
+            },
+            environment: {
+                supabase_url: SUPABASE_URL ? 'Set' : 'Missing',
+                telegram_backend_url: TELEGRAM_BACKEND_URL || 'Not set'
+            }
+        };
+
+        console.error('========== خطأ في بدء الحملة ==========');
+        console.error('Timestamp:', errorDetails.timestamp);
+        console.error('Error Name:', errorDetails.error_name);
+        console.error('Error Message:', errorDetails.error_message);
+        console.error('Error Stack:', errorDetails.error_stack);
+        console.error('Request Data:', JSON.stringify(errorDetails.request_data, null, 2));
+        console.error('Environment:', JSON.stringify(errorDetails.environment, null, 2));
+        console.error('Full Error Object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        console.error('========================================');
 
         return new Response(
             JSON.stringify({
@@ -169,7 +194,8 @@ Deno.serve(async (req) => {
                 error: {
                     code: 'CAMPAIGN_START_FAILED',
                     message: error.message || 'خطأ في بدء الحملة',
-                    timestamp: new Date().toISOString()
+                    timestamp: new Date().toISOString(),
+                    details: errorDetails
                 }
             }),
             {
