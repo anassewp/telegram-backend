@@ -73,6 +73,47 @@ interface TelegramSession {
   status: string
 }
 
+const extractSupabaseFunctionError = (fnError: any, fallbackMessage: string) => {
+  let errorMessage = fnError?.message || fallbackMessage
+
+  if (fnError?.context?.body) {
+    try {
+      const errorBody = typeof fnError.context.body === 'string'
+        ? JSON.parse(fnError.context.body)
+        : fnError.context.body
+
+      if (errorBody?.error?.message) {
+        errorMessage = errorBody.error.message
+      } else if (errorBody?.message) {
+        errorMessage = errorBody.message
+      }
+    } catch (parseError) {
+      console.error('Error parsing function error body:', parseError)
+    }
+  }
+
+  return errorMessage
+}
+
+const assertEdgeFunctionSuccess = <T extends { success?: boolean; error?: { message?: string } }>(
+  response: T | null,
+  fallbackMessage: string
+) => {
+  if (!response) {
+    throw new Error(fallbackMessage)
+  }
+
+  if (response.error) {
+    throw new Error(response.error.message || fallbackMessage)
+  }
+
+  if (response.success === false) {
+    throw new Error(fallbackMessage)
+  }
+
+  return response
+}
+
 export default function CampaignsPage() {
   const [mounted, setMounted] = useState(false)
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
@@ -379,34 +420,11 @@ export default function CampaignsPage() {
 
       if (createError) {
         console.error('Edge Function Error:', createError)
-        // محاولة استخراج رسالة الخطأ من response
-        let errorMessage = createError.message || 'حدث خطأ غير معروف'
-        if (createError.context && createError.context.body) {
-          try {
-            const errorBody = typeof createError.context.body === 'string' 
-              ? JSON.parse(createError.context.body) 
-              : createError.context.body
-            if (errorBody.error && errorBody.error.message) {
-              errorMessage = errorBody.error.message
-            } else if (errorBody.message) {
-              errorMessage = errorBody.message
-            }
-          } catch (e) {
-            console.error('Error parsing error body:', e)
-          }
-        }
+        const errorMessage = extractSupabaseFunctionError(createError, 'حدث خطأ غير معروف')
         throw new Error(errorMessage)
       }
 
-      if (data?.error) {
-        console.error('Error from Edge Function:', data.error)
-        throw new Error(data.error.message || 'فشل في إنشاء الحملة')
-      }
-
-      if (!data?.success) {
-        console.error('Campaign creation failed:', data)
-        throw new Error('فشل في إنشاء الحملة')
-      }
+      assertEdgeFunctionSuccess(data, 'فشل في إنشاء الحملة')
 
       setSuccess('تم إنشاء الحملة بنجاح!')
       setShowCreateModal(false)
@@ -416,7 +434,9 @@ export default function CampaignsPage() {
         message_text: '',
         target_type: 'groups',
         selected_groups: [],
+        selected_group_usernames: [],
         selected_members: [],
+        selected_member_usernames: [],
         session_ids: [],
         distribution_strategy: 'equal',
         max_messages_per_session: 100,
@@ -473,18 +493,11 @@ export default function CampaignsPage() {
 
       if (error) {
         console.error('❌ خطأ من supabase.functions.invoke:', error)
-        throw error
+        const errorMessage = extractSupabaseFunctionError(error, 'فشل في بدء الحملة')
+        throw new Error(errorMessage)
       }
       
-      if (data?.error) {
-        console.error('❌ خطأ من Edge Function:', data.error)
-        throw new Error(data.error.message || 'فشل في بدء الحملة')
-      }
-
-      if (!data?.success) {
-        console.error('❌ استجابة غير ناجحة:', data)
-        throw new Error('فشل في بدء الحملة - استجابة غير ناجحة')
-      }
+      assertEdgeFunctionSuccess(data, 'فشل في بدء الحملة')
 
       console.log('✅ تم بدء الحملة بنجاح')
       setSuccess('تم بدء الحملة بنجاح')
@@ -493,10 +506,25 @@ export default function CampaignsPage() {
       await fetchData()
       
       // إرسال دفعة فوراً بعد بدء الحملة (بدون انتظار 30 ثانية)
-      setTimeout(() => {
+      // انتظار 3 ثواني للتأكد من تحديث حالة الحملة في قاعدة البيانات
+      setTimeout(async () => {
         console.log('🚀 إرسال دفعة فورية بعد بدء الحملة')
-        handleSendBatch(campaignId, true)
-      }, 2000) // بعد ثانيتين من تحديث البيانات
+        // تحديث البيانات مرة أخرى للتأكد من حالة الحملة
+        await fetchData()
+        // انتظار قليلاً حتى يتم تحديث state
+        await new Promise(resolve => setTimeout(resolve, 500))
+        // التحقق من أن الحملة نشطة قبل الإرسال
+        const currentCampaign = campaigns.find(c => c.id === campaignId)
+        if (currentCampaign && currentCampaign.status === 'active') {
+          console.log('✓ الحملة نشطة، بدء إرسال الدفعة...')
+          handleSendBatch(campaignId, true)
+        } else {
+          console.warn('⚠️ الحملة لم تصبح نشطة بعد، سيتم المحاولة في الدفعة التلقائية', {
+            campaignId,
+            status: currentCampaign?.status || 'not found'
+          })
+        }
+      }, 3000) // بعد 3 ثواني من تحديث البيانات
     } catch (err: any) {
       console.error('❌ خطأ في handleStartCampaign:', err)
       setError(err.message || 'فشل في بدء الحملة')
@@ -515,8 +543,12 @@ export default function CampaignsPage() {
         }
       })
 
-      if (error) throw error
-      if (data?.error) throw new Error(data.error.message)
+      if (error) {
+        const errorMessage = extractSupabaseFunctionError(error, 'فشل في إيقاف الحملة')
+        throw new Error(errorMessage)
+      }
+
+      assertEdgeFunctionSuccess(data, 'فشل في إيقاف الحملة')
 
       setSuccess('تم إيقاف الحملة مؤقتاً')
       fetchData()
@@ -537,8 +569,12 @@ export default function CampaignsPage() {
         }
       })
 
-      if (error) throw error
-      if (data?.error) throw new Error(data.error.message)
+      if (error) {
+        const errorMessage = extractSupabaseFunctionError(error, 'فشل في استئناف الحملة')
+        throw new Error(errorMessage)
+      }
+
+      assertEdgeFunctionSuccess(data, 'فشل في استئناف الحملة')
 
       setSuccess('تم استئناف الحملة بنجاح')
       fetchData()
@@ -622,32 +658,21 @@ export default function CampaignsPage() {
       console.log('📥 استجابة من telegram-campaign-send-batch:', {
         hasData: !!data,
         hasError: !!error,
-        data: data ? {
-          success: data.success,
-          sent: data.data?.sent,
-          failed: data.data?.failed,
-          error: data.error
-        } : null,
+        data: data ? JSON.stringify(data, null, 2) : null,
         error: error ? {
           message: error.message,
-          context: error.context
+          context: error.context,
+          stack: error.stack
         } : null
       })
 
       if (error) {
         console.error('❌ خطأ من supabase.functions.invoke:', error)
-        throw error
+        const errorMessage = extractSupabaseFunctionError(error, 'فشل في إرسال الدفعة')
+        throw new Error(errorMessage)
       }
       
-      if (data?.error) {
-        console.error('❌ خطأ من Edge Function:', data.error)
-        throw new Error(data.error.message || 'فشل في إرسال الدفعة')
-      }
-
-      if (!data?.success) {
-        console.error('❌ استجابة غير ناجحة:', data)
-        throw new Error('فشل في إرسال الدفعة - استجابة غير ناجحة')
-      }
+      assertEdgeFunctionSuccess(data, 'فشل في إرسال الدفعة')
 
       const sent = data.data?.sent || 0
       const failed = data.data?.failed || 0
@@ -2167,6 +2192,8 @@ export default function CampaignsPage() {
                       target_type: 'groups',
                       selected_groups: [],
                       selected_members: [],
+                      selected_group_usernames: [],
+                      selected_member_usernames: [],
                       session_ids: [],
                       distribution_strategy: 'equal',
                       max_messages_per_session: 100,

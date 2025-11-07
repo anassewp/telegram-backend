@@ -5,6 +5,7 @@
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+const TELEGRAM_BACKEND_URL = Deno.env.get('TELEGRAM_BACKEND_URL') || 'http://localhost:8000';
 
 Deno.serve(async (req) => {
     const corsHeaders = {
@@ -24,7 +25,7 @@ Deno.serve(async (req) => {
 
     try {
         const requestData = await req.json();
-        const { campaign_id, user_id } = requestData;
+        const { campaign_id, user_id, reason } = requestData;
 
         if (!campaign_id || !user_id) {
             throw new Error('المعاملات المطلوبة مفقودة: campaign_id, user_id');
@@ -89,7 +90,7 @@ Deno.serve(async (req) => {
         }
 
         // Update campaign status to 'active'
-        const updateResponse = await fetch(
+        const patchResponse = await fetch(
             `${SUPABASE_URL}/rest/v1/telegram_campaigns?id=eq.${campaign_id}`,
             {
                 method: 'PATCH',
@@ -107,13 +108,59 @@ Deno.serve(async (req) => {
             }
         );
 
-        if (!updateResponse.ok) {
-            const errorText = await updateResponse.text();
+        if (!patchResponse.ok) {
+            const errorText = await patchResponse.text();
             throw new Error(`فشل في تحديث حالة الحملة: ${errorText}`);
         }
 
-        const updatedCampaign = await updateResponse.json();
+        const updatedCampaign = await patchResponse.json();
         const campaignData = Array.isArray(updatedCampaign) ? updatedCampaign[0] : updatedCampaign;
+
+        if (!TELEGRAM_BACKEND_URL || TELEGRAM_BACKEND_URL === 'http://localhost:8000') {
+            console.warn('⚠️ TELEGRAM_BACKEND_URL غير مضبوط. سيتم تحديث قاعدة البيانات فقط.');
+        } else {
+            try {
+                const backendResponse = await fetch(`${TELEGRAM_BACKEND_URL}/campaigns/resume/${campaign_id}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        campaign_id,
+                        user_id,
+                        reason: reason || 'Resume requested from dashboard'
+                    })
+                });
+
+                if (!backendResponse.ok) {
+                    const backendErrorText = await backendResponse.text();
+                    console.error('✗ فشل في إبلاغ Telegram Backend باستئناف الحملة:', backendErrorText);
+                    await fetch(
+                        `${SUPABASE_URL}/rest/v1/telegram_campaigns?id=eq.${campaign_id}`,
+                        {
+                            method: 'PATCH',
+                            headers: {
+                                'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+                                'apikey': SUPABASE_SERVICE_ROLE_KEY,
+                                'Content-Type': 'application/json',
+                                'Prefer': 'return=representation'
+                            },
+                            body: JSON.stringify({
+                                status: 'paused',
+                                updated_at: new Date().toISOString()
+                            })
+                        }
+                    ).catch((revertError) => {
+                        console.error('⚠️ تعذر إعادة حالة الحملة بعد فشل Backend:', revertError);
+                    });
+
+                    throw new Error(`فشل في إبلاغ Telegram Backend: ${backendErrorText.substring(0, 200)}`);
+                }
+            } catch (backendError) {
+                console.error('✗ حدث خطأ أثناء إبلاغ Telegram Backend باستئناف الحملة:', backendError);
+                throw backendError instanceof Error ? backendError : new Error(String(backendError));
+            }
+        }
 
         return new Response(
             JSON.stringify({

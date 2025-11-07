@@ -336,129 +336,166 @@ Deno.serve(async (req) => {
         if (campaign.target_type === 'members' || campaign.target_type === 'both') {
             // معالجة selected_members من JSONB
             let selectedMembers: any[] = [];
-            if (campaign.selected_members) {
-                if (Array.isArray(campaign.selected_members)) {
-                    selectedMembers = campaign.selected_members;
-                } else if (typeof campaign.selected_members === 'string') {
-                    try {
-                        selectedMembers = JSON.parse(campaign.selected_members);
-                    } catch (e) {
-                        console.error('Error parsing selected_members:', e);
-                        selectedMembers = [];
-                    }
-                }
-            }
             
-            console.log('========== معالجة الأعضاء ==========');
-            console.log('selected_members type:', typeof campaign.selected_members);
-            console.log('selected_members raw:', campaign.selected_members);
-            console.log('Processed selectedMembers:', JSON.stringify(selectedMembers, null, 2));
-            console.log('selectedMembers length:', selectedMembers.length);
-            
-            if (selectedMembers.length > 0) {
-                // فصل IDs و usernames
-                const memberIds: number[] = [];
-                const memberUsernames: string[] = [];
+            try {
+                console.log('========== معالجة الأعضاء ==========');
+                console.log('selected_members type:', typeof campaign.selected_members);
+                console.log('selected_members raw:', JSON.stringify(campaign.selected_members, null, 2));
+                console.log('selected_members is null:', campaign.selected_members === null);
+                console.log('selected_members is undefined:', campaign.selected_members === undefined);
                 
-                selectedMembers.forEach((item: any, index: number) => {
-                    console.log(`Processing member item ${index}:`, {
-                        type: typeof item,
-                        value: item,
-                        isNumber: typeof item === 'number',
-                        isObject: typeof item === 'object',
-                        isString: typeof item === 'string'
-                    });
-                    
-                    if (typeof item === 'number') {
-                        memberIds.push(item);
-                        console.log(`  → Added as ID: ${item}`);
-                    } else if (typeof item === 'object' && item !== null) {
-                        if (item.username) {
-                            memberUsernames.push(item.username);
-                            console.log(`  → Added as username: ${item.username}`);
-                        } else if (item.telegram_user_id) {
-                            memberIds.push(item.telegram_user_id);
-                            console.log(`  → Added as telegram_user_id: ${item.telegram_user_id}`);
-                        } else {
-                            console.warn(`  ⚠️ Unknown object structure:`, item);
+                if (campaign.selected_members !== null && campaign.selected_members !== undefined) {
+                    if (Array.isArray(campaign.selected_members)) {
+                        selectedMembers = campaign.selected_members;
+                        console.log('✓ selected_members is already an array');
+                    } else if (typeof campaign.selected_members === 'string') {
+                        try {
+                            selectedMembers = JSON.parse(campaign.selected_members);
+                            console.log('✓ parsed selected_members from string');
+                        } catch (e) {
+                            console.error('✗ Error parsing selected_members:', e);
+                            selectedMembers = [];
                         }
-                    } else if (typeof item === 'string') {
-                        if (item.match(/^\d+$/)) {
-                            const numId = Number(item);
-                            memberIds.push(numId);
-                            console.log(`  → Added as string ID: ${numId}`);
+                    } else if (typeof campaign.selected_members === 'object') {
+                        // JSONB قد يرجع كـ object مباشرة
+                        // لكن arrays هي objects في JavaScript، لذا تحقق من Array.isArray أولاً
+                        if (Array.isArray(campaign.selected_members)) {
+                            selectedMembers = campaign.selected_members;
+                            console.log('✓ selected_members is array (object type)');
                         } else {
-                            memberUsernames.push(item.replace('@', ''));
-                            console.log(`  → Added as string username: ${item.replace('@', '')}`);
-                        }
-                    } else {
-                        console.warn(`  ⚠️ Unknown item type:`, typeof item, item);
-                    }
-                });
-
-                console.log(`Extracted: ${memberIds.length} IDs, ${memberUsernames.length} usernames`);
-                console.log('Member IDs:', memberIds);
-                console.log('Member Usernames:', memberUsernames);
-
-                // جلب الأعضاء من قاعدة البيانات (IDs فقط)
-                if (memberIds.length > 0) {
-                    console.log(`جلب ${memberIds.length} عضو من قاعدة البيانات...`);
-                    const membersResponse = await fetch(
-                        `${SUPABASE_URL}/rest/v1/telegram_members?telegram_user_id=in.(${memberIds.join(',')})&user_id=eq.${user_id}`,
-                        {
-                            headers: {
-                                'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-                                'apikey': SUPABASE_SERVICE_ROLE_KEY,
-                                'Content-Type': 'application/json'
+                            // إذا كان object واحد (ليس array)، حوله إلى array
+                            try {
+                                selectedMembers = [campaign.selected_members];
+                                console.log('✓ converted single object to array');
+                            } catch (e) {
+                                console.error('✗ Error converting object to array:', e);
+                                selectedMembers = [];
                             }
                         }
-                    );
-
-                    if (!membersResponse.ok) {
-                        const errorText = await membersResponse.text();
-                        console.error(`✗ فشل في جلب الأعضاء: ${membersResponse.status} - ${errorText}`);
                     } else {
-                        let members = await membersResponse.json();
-                        console.log(`✓ تم جلب ${members.length} عضو من قاعدة البيانات`);
-                        
-                        // Apply filters
-                        const beforeFilter = members.length;
-                        members = members.filter((m: any) => {
-                            if (campaign.exclude_bots && m.is_bot) return false;
-                            if (campaign.exclude_premium && m.is_premium) return false;
-                            if (campaign.exclude_verified && m.is_verified) return false;
-                            if (campaign.exclude_scam && m.is_scam) return false;
-                            if (campaign.exclude_fake && m.is_fake) return false;
-                            if (sentMemberIds.includes(m.telegram_user_id)) return false;
-                            return true;
-                        });
-                        
-                        console.log(`✓ بعد الفلترة: ${members.length} عضو (تم استبعاد ${beforeFilter - members.length})`);
-
-                        targets.push(...members.map((m: any) => ({ 
-                            type: 'member', 
-                            id: m.telegram_user_id, 
-                            data: m 
-                        })));
+                        console.warn('⚠️ selected_members has unexpected type:', typeof campaign.selected_members);
+                        selectedMembers = [];
                     }
-                }
-
-                // إضافة usernames مباشرة (سيتم حلها في Backend)
-                if (memberUsernames.length > 0) {
-                    console.log(`إضافة ${memberUsernames.length} username مباشرة...`);
-                    memberUsernames.forEach((username: string) => {
-                        targets.push({ 
-                            type: 'member', 
-                            id: null, 
-                            username: username,
-                            data: { username: username } 
-                        });
-                    });
+                } else {
+                    console.warn('⚠️ selected_members is null or undefined');
+                    selectedMembers = [];
                 }
                 
-                console.log('=========================================');
-            } else {
-                console.warn('⚠️ لا توجد أعضاء محددة في selected_members');
+                console.log('Processed selectedMembers:', JSON.stringify(selectedMembers, null, 2));
+                console.log('selectedMembers length:', selectedMembers.length);
+                
+                if (selectedMembers.length > 0) {
+                    // فصل IDs و usernames
+                    const memberIds: number[] = [];
+                    const memberUsernames: string[] = [];
+                    
+                    selectedMembers.forEach((item: any, index: number) => {
+                        console.log(`Processing member item ${index}:`, {
+                            type: typeof item,
+                            value: item,
+                            isNumber: typeof item === 'number',
+                            isObject: typeof item === 'object',
+                            isString: typeof item === 'string'
+                        });
+                        
+                        if (typeof item === 'number') {
+                            memberIds.push(item);
+                            console.log(`  → Added as ID: ${item}`);
+                        } else if (typeof item === 'object' && item !== null) {
+                            if (item.username) {
+                                memberUsernames.push(item.username);
+                                console.log(`  → Added as username: ${item.username}`);
+                            } else if (item.telegram_user_id) {
+                                memberIds.push(item.telegram_user_id);
+                                console.log(`  → Added as telegram_user_id: ${item.telegram_user_id}`);
+                            } else {
+                                console.warn(`  ⚠️ Unknown object structure:`, item);
+                            }
+                        } else if (typeof item === 'string') {
+                            if (item.match(/^\d+$/)) {
+                                const numId = Number(item);
+                                memberIds.push(numId);
+                                console.log(`  → Added as string ID: ${numId}`);
+                            } else {
+                                memberUsernames.push(item.replace('@', ''));
+                                console.log(`  → Added as string username: ${item.replace('@', '')}`);
+                            }
+                        } else {
+                            console.warn(`  ⚠️ Unknown item type:`, typeof item, item);
+                        }
+                    });
+
+                    console.log(`Extracted: ${memberIds.length} IDs, ${memberUsernames.length} usernames`);
+                    console.log('Member IDs:', memberIds);
+                    console.log('Member Usernames:', memberUsernames);
+
+                    // جلب الأعضاء من قاعدة البيانات (IDs فقط)
+                    if (memberIds.length > 0) {
+                        console.log(`جلب ${memberIds.length} عضو من قاعدة البيانات...`);
+                        const membersResponse = await fetch(
+                            `${SUPABASE_URL}/rest/v1/telegram_members?telegram_user_id=in.(${memberIds.join(',')})&user_id=eq.${user_id}`,
+                            {
+                                headers: {
+                                    'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+                                    'apikey': SUPABASE_SERVICE_ROLE_KEY,
+                                    'Content-Type': 'application/json'
+                                }
+                            }
+                        );
+
+                        if (!membersResponse.ok) {
+                            const errorText = await membersResponse.text();
+                            console.error(`✗ فشل في جلب الأعضاء: ${membersResponse.status} - ${errorText}`);
+                        } else {
+                            let members = await membersResponse.json();
+                            console.log(`✓ تم جلب ${members.length} عضو من قاعدة البيانات`);
+                            
+                            // Apply filters
+                            const beforeFilter = members.length;
+                            members = members.filter((m: any) => {
+                                if (campaign.exclude_bots && m.is_bot) return false;
+                                if (campaign.exclude_premium && m.is_premium) return false;
+                                if (campaign.exclude_verified && m.is_verified) return false;
+                                if (campaign.exclude_scam && m.is_scam) return false;
+                                if (campaign.exclude_fake && m.is_fake) return false;
+                                if (sentMemberIds.includes(m.telegram_user_id)) return false;
+                                return true;
+                            });
+                            
+                            console.log(`✓ بعد الفلترة: ${members.length} عضو (تم استبعاد ${beforeFilter - members.length})`);
+
+                            targets.push(...members.map((m: any) => ({ 
+                                type: 'member', 
+                                id: m.telegram_user_id, 
+                                data: m 
+                            })));
+                        }
+                    }
+
+                    // إضافة usernames مباشرة (سيتم حلها في Backend)
+                    if (memberUsernames.length > 0) {
+                        console.log(`إضافة ${memberUsernames.length} username مباشرة...`);
+                        memberUsernames.forEach((username: string) => {
+                            targets.push({ 
+                                type: 'member', 
+                                id: null, 
+                                username: username,
+                                data: { username: username } 
+                            });
+                        });
+                    }
+                    
+                    console.log('=========================================');
+                } else {
+                    console.warn('⚠️ لا توجد أعضاء محددة في selected_members');
+                }
+            } catch (membersError: any) {
+                console.error('========== خطأ في معالجة selected_members ==========');
+                console.error('Error:', membersError);
+                console.error('Error message:', membersError?.message);
+                console.error('Error stack:', membersError?.stack);
+                console.error('===============================================');
+                throw new Error(`خطأ في معالجة selected_members: ${membersError?.message || 'خطأ غير معروف'}`);
             }
         }
 

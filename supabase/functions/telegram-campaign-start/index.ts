@@ -144,32 +144,107 @@ Deno.serve(async (req) => {
         }
 
         // Update campaign status to 'active'
-        const updateResponse = await fetch(
-            `${SUPABASE_URL}/rest/v1/telegram_campaigns?id=eq.${campaign_id}`,
-            {
-                method: 'PATCH',
-                headers: {
-                    'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-                    'apikey': SUPABASE_SERVICE_ROLE_KEY,
-                    'Content-Type': 'application/json',
-                    'Prefer': 'return=representation'
-                },
-                body: JSON.stringify({
-                    status: 'active',
-                    started_at: new Date().toISOString(),
-                    updated_at: new Date().toISOString()
-                })
-            }
-        );
+        const patchCampaign = async (payload: Record<string, any>, throwOnError: boolean = true) => {
+            const response = await fetch(
+                `${SUPABASE_URL}/rest/v1/telegram_campaigns?id=eq.${campaign_id}`,
+                {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+                        'apikey': SUPABASE_SERVICE_ROLE_KEY,
+                        'Content-Type': 'application/json',
+                        'Prefer': 'return=representation'
+                    },
+                    body: JSON.stringify(payload)
+                }
+            );
 
-        if (!updateResponse.ok) {
-            const errorText = await updateResponse.text();
-            console.error(`✗ فشل في تحديث حالة الحملة:`, {
-                status: updateResponse.status,
-                statusText: updateResponse.statusText,
-                error: errorText.substring(0, 500)
-            });
-            throw new Error(`فشل في تحديث حالة الحملة: ${errorText.substring(0, 200)}`);
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error(`✗ فشل في تحديث حالة الحملة:`, {
+                    status: response.status,
+                    statusText: response.statusText,
+                    error: errorText.substring(0, 500)
+                });
+
+                if (throwOnError) {
+                    throw new Error(`فشل في تحديث حالة الحملة: ${errorText.substring(0, 200)}`);
+                }
+            }
+
+            return response;
+        };
+
+        const nowIso = new Date().toISOString();
+        await patchCampaign({
+            status: 'active',
+            started_at: nowIso,
+            updated_at: nowIso
+        });
+
+        if (!TELEGRAM_BACKEND_URL || TELEGRAM_BACKEND_URL === 'http://localhost:8000') {
+            console.warn('⚠️ TELEGRAM_BACKEND_URL غير مضبوط. سيتم تحديث قاعدة البيانات فقط بدون إبلاغ Backend.');
+        } else {
+            try {
+                const selectedGroups = Array.isArray(campaign.selected_groups) ? campaign.selected_groups : [];
+                const selectedMembers = Array.isArray(campaign.selected_members) ? campaign.selected_members : [];
+
+                const backendPayload = {
+                    campaign_id: campaign.id,
+                    user_id,
+                    name: campaign.name,
+                    session_ids: sessionIds,
+                    total_targets: campaign.total_targets || selectedGroups.length + selectedMembers.length,
+                    distribution_strategy: campaign.distribution_strategy || 'equal',
+                    settings: {
+                        delay_between_messages_min: campaign.delay_between_messages_min,
+                        delay_between_messages_max: campaign.delay_between_messages_max,
+                        delay_variation: campaign.delay_variation,
+                        max_messages_per_session: campaign.max_messages_per_session,
+                        max_messages_per_day: campaign.max_messages_per_day,
+                        exclude_sent_members: campaign.exclude_sent_members,
+                        exclude_bots: campaign.exclude_bots,
+                        exclude_premium: campaign.exclude_premium,
+                        exclude_verified: campaign.exclude_verified,
+                        exclude_scam: campaign.exclude_scam,
+                        exclude_fake: campaign.exclude_fake,
+                        personalize_messages: campaign.personalize_messages,
+                        vary_emojis: campaign.vary_emojis
+                    },
+                    metadata: {
+                        campaign_type: campaign.campaign_type,
+                        target_type: campaign.target_type,
+                        schedule_at: campaign.schedule_at,
+                        selected_groups_count: selectedGroups.length,
+                        selected_members_count: selectedMembers.length
+                    }
+                };
+
+                console.log(`📡 إبلاغ Telegram Backend ببدء الحملة: ${TELEGRAM_BACKEND_URL}/campaigns/start/${campaign.id}`);
+                const backendResponse = await fetch(`${TELEGRAM_BACKEND_URL}/campaigns/start/${campaign.id}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(backendPayload)
+                });
+
+                if (!backendResponse.ok) {
+                    const backendErrorText = await backendResponse.text();
+                    console.error('✗ فشل في استدعاء Telegram Backend لبدء الحملة:', backendErrorText);
+                    await patchCampaign({
+                        status: 'failed',
+                        updated_at: new Date().toISOString()
+                    }, false);
+                    throw new Error(`فشل في إعلام Telegram Backend: ${backendErrorText.substring(0, 200)}`);
+                }
+
+                const backendResult = await backendResponse.json().catch(() => ({}));
+                console.log('✓ تم تسجيل الحملة في Telegram Backend:', backendResult);
+            } catch (backendError) {
+                console.error('✗ حدث خطأ أثناء إبلاغ Telegram Backend:', backendError);
+                throw backendError instanceof Error ? backendError : new Error(String(backendError));
+            }
         }
 
         console.log(`✓ تم بدء الحملة بنجاح: ${campaign.id}`);

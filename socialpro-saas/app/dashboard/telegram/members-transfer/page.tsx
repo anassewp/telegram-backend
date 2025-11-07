@@ -61,6 +61,11 @@ export default function MembersTransferPage() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [transferProgress, setTransferProgress] = useState(0)
+  const [lastTransferStats, setLastTransferStats] = useState({
+    totalRequested: 0,
+    totalTransferred: 0,
+    totalFailed: 0
+  })
   const [selectedSessions, setSelectedSessions] = useState<string[]>([])
   const [distributionStrategy, setDistributionStrategy] = useState<'equal' | 'round_robin' | 'random' | 'weighted'>('equal')
   const [delayMin, setDelayMin] = useState(60)
@@ -175,17 +180,6 @@ export default function MembersTransferPage() {
         throw new Error('المجموعات غير موجودة')
       }
 
-      // محاكاة التقدم
-      const progressInterval = setInterval(() => {
-        setTransferProgress(prev => {
-          if (prev >= 90) {
-            clearInterval(progressInterval)
-            return 90
-          }
-          return prev + 5
-        })
-      }, 500)
-
       // نقل الأعضاء عبر Edge Function الجديدة مع توزيع ذكي
       const { data, error: transferError } = await supabase.functions.invoke('telegram-transfer-members-batch', {
         body: {
@@ -201,9 +195,6 @@ export default function MembersTransferPage() {
         }
       })
 
-      clearInterval(progressInterval)
-      setTransferProgress(100)
-
       if (transferError) throw transferError
 
       if (data?.error) {
@@ -216,6 +207,16 @@ export default function MembersTransferPage() {
 
       const transferred = data?.data?.total_transferred || 0
       const failed = data?.data?.total_failed || 0
+      const totalRequested = data?.data?.total_requested || selectedMembers.length
+      const processed = Math.min(totalRequested, transferred + failed)
+      const percentComplete = totalRequested > 0 ? Math.round((processed / totalRequested) * 100) : 100
+
+      setTransferProgress(percentComplete)
+      setLastTransferStats({
+        totalRequested,
+        totalTransferred: transferred,
+        totalFailed: failed
+      })
 
       setSuccess(`تم نقل ${transferred} عضو بنجاح${failed > 0 ? ` (فشل نقل ${failed} عضو)` : ''}`)
       setShowConfirmModal(false)
@@ -254,11 +255,10 @@ export default function MembersTransferPage() {
     }
   }
 
-  const stats = {
-    total_transferred: 0, // يمكن حسابها من قاعدة البيانات
-    active_tasks: 0,
-    success_rate: 0
-  }
+  const successRate = lastTransferStats.totalRequested > 0
+    ? Math.round((lastTransferStats.totalTransferred / lastTransferStats.totalRequested) * 100)
+    : 0
+  const activeTasks = transferring ? 1 : 0
 
   if (!mounted) {
     return null
@@ -335,7 +335,7 @@ export default function MembersTransferPage() {
           <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl" />
           <div className="relative">
             <ArrowRightLeft className="w-8 h-8 mb-3 opacity-90" />
-              <div className="text-3xl font-bold mb-1">{stats.total_transferred.toLocaleString()}</div>
+              <div className="text-3xl font-bold mb-1">{lastTransferStats.totalTransferred.toLocaleString()}</div>
             <div className="text-white/80 text-sm">أعضاء تم نقلهم بنجاح</div>
           </div>
         </div>
@@ -344,7 +344,7 @@ export default function MembersTransferPage() {
           <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl" />
           <div className="relative">
             <Zap className="w-8 h-8 mb-3 opacity-90" />
-              <div className="text-3xl font-bold mb-1">{stats.active_tasks}</div>
+              <div className="text-3xl font-bold mb-1">{activeTasks}</div>
             <div className="text-white/80 text-sm">مهمة نقل نشطة</div>
           </div>
         </div>
@@ -353,7 +353,7 @@ export default function MembersTransferPage() {
           <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl" />
           <div className="relative">
             <TrendingUp className="w-8 h-8 mb-3 opacity-90" />
-              <div className="text-3xl font-bold mb-1">{stats.success_rate}%</div>
+              <div className="text-3xl font-bold mb-1">{successRate}%</div>
             <div className="text-white/80 text-sm">معدل النجاح</div>
           </div>
         </div>
@@ -673,9 +673,15 @@ export default function MembersTransferPage() {
                       className="h-full bg-gradient-to-r from-indigo-600 to-purple-600 transition-all duration-500 rounded-full"
                       style={{ width: `${transferProgress}%` }}
                     />
-          </div>
-        </div>
-      )}
+                  </div>
+                  {lastTransferStats.totalRequested > 0 && (
+                    <p className="text-xs text-gray-600 mt-2">
+                      تم تنفيذ {lastTransferStats.totalTransferred} من أصل {lastTransferStats.totalRequested} عضو
+                      {lastTransferStats.totalFailed > 0 && ` (فشل ${lastTransferStats.totalFailed})`}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex gap-3">
