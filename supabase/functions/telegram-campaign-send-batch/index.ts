@@ -589,8 +589,8 @@ Deno.serve(async (req) => {
                     username: target.username
                 });
                 
+                let messageText = campaign.message_text;
                 try {
-                    let messageText = campaign.message_text;
                     
                     // Personalize message if enabled
                     if (campaign.personalize_messages && target.type === 'member' && target.data) {
@@ -806,7 +806,7 @@ Deno.serve(async (req) => {
                         campaign_id: campaign_id,
                         user_id: user_id,
                         session_id: session.id,
-                        message_text: campaign.message_text,
+                        message_text: messageText,
                         status: 'failed',
                         error_message: error.message || 'خطأ غير معروف',
                         created_at: new Date().toISOString(),
