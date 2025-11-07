@@ -650,6 +650,14 @@ Deno.serve(async (req) => {
                             throw new Error('لا يوجد member_telegram_id أو username للعضو');
                         }
                         
+                        if (target.data?.access_hash) {
+                            requestBody.access_hash = String(target.data.access_hash);
+                        }
+                        
+                        if (!requestBody.username && target.data?.username) {
+                            requestBody.username = target.data.username;
+                        }
+                        
                         console.log(`      📡 استدعاء Backend: ${TELEGRAM_BACKEND_URL}/messages/send-to-member`);
                         sendResponse = await fetch(`${TELEGRAM_BACKEND_URL}/messages/send-to-member`, {
                             method: 'POST',
