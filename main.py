@@ -9,7 +9,7 @@ from telethon.tl.functions.channels import GetFullChannelRequest, JoinChannelReq
 from telethon.tl.functions.contacts import SearchRequest
 from telethon.tl.types import InputMessagesFilterEmpty, InputPeerEmpty, InputPeerChannel
 import os
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any, Tuple
 import asyncio
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -124,6 +124,28 @@ class CampaignCreateRequest(BaseModel):
     message_templates: Optional[List[str]] = []
     schedule_at: Optional[str] = None
 
+class CampaignSessionConfig(BaseModel):
+    session_id: str
+    session_name: Optional[str] = None
+    phone: Optional[str] = None
+    max_messages_per_day: Optional[int] = None
+    status: Optional[str] = 'active'
+
+class CampaignStartRequest(BaseModel):
+    campaign_id: str
+    user_id: Optional[str]
+    name: Optional[str]
+    session_ids: List[str]
+    total_targets: Optional[int] = 0
+    settings: Dict[str, Any] = {}
+    metadata: Dict[str, Any] = {}
+    distribution_strategy: Optional[str] = 'equal'
+
+class CampaignControlRequest(BaseModel):
+    campaign_id: str
+    user_id: Optional[str]
+    reason: Optional[str] = None
+
 class TransferMembersBatchRequest(BaseModel):
     session_ids: List[str]  # قائمة session_ids
     api_ids: Dict[str, str]  # {session_id: api_id}
@@ -144,6 +166,9 @@ temp_clients = {}
 rate_limit_store: Dict[str, List[datetime]] = defaultdict(list)
 RATE_LIMIT_MESSAGES = 20  # عدد الرسائل المسموح بها
 RATE_LIMIT_WINDOW = timedelta(minutes=1)  # نافذة زمنية (دقيقة واحدة)
+session_daily_transfer_counts: Dict[str, Dict[str, int]] = defaultdict(dict)
+campaign_states: Dict[str, Dict[str, Any]] = {}
+campaign_state_lock = asyncio.Lock()
 
 def check_rate_limit(session_string: str) -> bool:
     """
@@ -161,6 +186,28 @@ def check_rate_limit(session_string: str) -> bool:
         return False
     
     return True
+
+def get_session_daily_usage(session_id: str) -> Tuple[str, int]:
+    """
+    يرجع (تاريخ اليوم, عدد الأعضاء المنقولين اليوم) لجلسة معينة
+    يقوم أيضاً بتنظيف السجلات القديمة للحفاظ على الذاكرة
+    """
+    today = datetime.utcnow().strftime('%Y-%m-%d')
+    session_usage = session_daily_transfer_counts[session_id]
+    
+    for recorded_day in list(session_usage.keys()):
+        if recorded_day != today:
+            del session_usage[recorded_day]
+    
+    current_count = session_usage.get(today, 0)
+    return today, current_count
+
+def increment_session_daily_usage(session_id: str, day_key: str, increment: int = 1) -> None:
+    """
+    يزيد عدد النقل اليومي لجلسة معينة
+    """
+    session_daily_transfer_counts[session_id][day_key] = session_daily_transfer_counts[session_id].get(day_key, 0) + increment
+
 
 def record_message_sent(session_string: str):
     """
@@ -1503,38 +1550,101 @@ async def create_campaign(request: CampaignCreateRequest):
     }
 
 @app.post("/campaigns/start/{campaign_id}")
-async def start_campaign(campaign_id: str):
+async def start_campaign(campaign_id: str, request: CampaignStartRequest):
     """
-    بدء تنفيذ الحملة (يجب أن يتم استدعاؤه من Edge Function مع بيانات الحملة)
+    بدء تنفيذ الحملة (يتم استدعاؤه من Edge Function مع بيانات الحملة)
+    يقوم بتخزين حالة الحملة محلياً ليتمكن الباكند من معرفة حالة الحملة الحالية
     """
-    # هذا endpoint يحتاج بيانات الحملة من قاعدة البيانات
-    # سيتم تنفيذه في Edge Function
+    if request.campaign_id and request.campaign_id != campaign_id:
+        raise HTTPException(status_code=400, detail="campaign_id mismatch between path and payload")
+    
+    if not request.session_ids:
+        raise HTTPException(status_code=400, detail="At least one session_id is required")
+    
+    if request.distribution_strategy not in ['equal', 'round_robin', 'random', 'weighted']:
+        raise HTTPException(status_code=400, detail="Invalid distribution_strategy")
+    
+    timestamp = datetime.utcnow().isoformat()
+    
+    async with campaign_state_lock:
+        existing_state = campaign_states.get(campaign_id)
+        if existing_state and existing_state.get("status") == "active":
+            raise HTTPException(status_code=400, detail="Campaign already active")
+        
+        campaign_states[campaign_id] = {
+            "campaign_id": campaign_id,
+            "user_id": request.user_id,
+            "name": request.name,
+            "status": "active",
+            "distribution_strategy": request.distribution_strategy,
+            "session_ids": request.session_ids,
+            "total_targets": request.total_targets or 0,
+            "settings": request.settings,
+            "metadata": request.metadata,
+            "started_at": timestamp,
+            "updated_at": timestamp
+        }
+        
+        state_snapshot = campaign_states[campaign_id].copy()
+    
     return {
         "success": True,
-        "message": "Campaign start endpoint - to be implemented in Edge Function",
-        "campaign_id": campaign_id
+        "message": "Campaign started and state registered successfully",
+        "campaign": state_snapshot
     }
 
 @app.post("/campaigns/pause/{campaign_id}")
-async def pause_campaign(campaign_id: str):
+async def pause_campaign(campaign_id: str, request: CampaignControlRequest):
     """
     إيقاف الحملة مؤقتاً
     """
+    timestamp = datetime.utcnow().isoformat()
+    
+    async with campaign_state_lock:
+        campaign = campaign_states.get(campaign_id)
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found in backend state")
+        
+        if campaign.get("status") != "active":
+            raise HTTPException(status_code=400, detail="Campaign is not active and cannot be paused")
+        
+        campaign["status"] = "paused"
+        campaign["paused_at"] = timestamp
+        campaign["updated_at"] = timestamp
+        campaign["last_reason"] = request.reason
+        state_snapshot = campaign.copy()
+    
     return {
         "success": True,
-        "message": "Campaign pause endpoint - to be implemented in Edge Function",
-        "campaign_id": campaign_id
+        "message": "Campaign paused successfully",
+        "campaign": state_snapshot
     }
 
 @app.post("/campaigns/resume/{campaign_id}")
-async def resume_campaign(campaign_id: str):
+async def resume_campaign(campaign_id: str, request: CampaignControlRequest):
     """
     استئناف الحملة
     """
+    timestamp = datetime.utcnow().isoformat()
+    
+    async with campaign_state_lock:
+        campaign = campaign_states.get(campaign_id)
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found in backend state")
+        
+        if campaign.get("status") != "paused":
+            raise HTTPException(status_code=400, detail="Campaign is not paused")
+        
+        campaign["status"] = "active"
+        campaign["resumed_at"] = timestamp
+        campaign["updated_at"] = timestamp
+        campaign["last_reason"] = request.reason
+        state_snapshot = campaign.copy()
+    
     return {
         "success": True,
-        "message": "Campaign resume endpoint - to be implemented in Edge Function",
-        "campaign_id": campaign_id
+        "message": "Campaign resumed successfully",
+        "campaign": state_snapshot
     }
 
 @app.post("/members/transfer-batch")
@@ -1570,11 +1680,36 @@ async def transfer_members_batch(request: TransferMembersBatchRequest):
             session_string = request.session_strings.get(session_id)
             api_id = request.api_ids.get(session_id)
             api_hash = request.api_hashes.get(session_id)
+            today_key, transferred_today = get_session_daily_usage(session_id)
+            max_per_day = request.max_per_day_per_session or 0
+            available_quota = len(member_ids) if max_per_day <= 0 else max(0, max_per_day - transferred_today)
+            
+            if available_quota <= 0:
+                results["failed"].extend([
+                    {
+                        "member_id": mid,
+                        "error": "Daily transfer limit reached for this session"
+                    }
+                    for mid in member_ids
+                ])
+                continue
+            
+            allowed_member_ids = member_ids[:available_quota]
+            overflow_member_ids = member_ids[available_quota:]
+            
+            if overflow_member_ids:
+                results["failed"].extend([
+                    {
+                        "member_id": mid,
+                        "error": "Daily transfer limit reached for this session"
+                    }
+                    for mid in overflow_member_ids
+                ])
             
             if not all([session_string, api_id, api_hash]):
                 results["failed"].extend([
                     {"member_id": mid, "error": f"Missing session data for {session_id}"}
-                    for mid in member_ids
+                    for mid in allowed_member_ids
                 ])
                 continue
             
@@ -1612,7 +1747,7 @@ async def transfer_members_batch(request: TransferMembersBatchRequest):
                 session_transferred = []
                 session_failed = []
                 
-                for member_id in member_ids:
+                for member_id in allowed_member_ids:
                     try:
                         # تأخير ذكي قبل كل عملية نقل
                         delay = smart_delay(request.delay_min, request.delay_max, variation=True)
@@ -1632,6 +1767,9 @@ async def transfer_members_batch(request: TransferMembersBatchRequest):
                             "username": getattr(user, 'username', None),
                             "first_name": getattr(user, 'first_name', None)
                         })
+                        
+                        if max_per_day > 0:
+                            increment_session_daily_usage(session_id, today_key)
                         
                     except FloodWaitError as e:
                         wait_time = e.seconds
