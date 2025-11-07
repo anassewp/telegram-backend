@@ -7,7 +7,7 @@ from telethon.errors import SessionPasswordNeededError, FloodWaitError, UserBann
 from telethon.tl.functions.messages import AddChatUserRequest, SearchGlobalRequest, ImportChatInviteRequest
 from telethon.tl.functions.channels import GetFullChannelRequest, JoinChannelRequest
 from telethon.tl.functions.contacts import SearchRequest
-from telethon.tl.types import InputMessagesFilterEmpty, InputPeerEmpty, InputPeerChannel
+from telethon.tl.types import InputMessagesFilterEmpty, InputPeerEmpty, InputPeerChannel, InputPeerUser
 import os
 from typing import List, Optional, Dict, Any, Tuple
 import asyncio
@@ -95,7 +95,9 @@ class SendToMemberRequest(BaseModel):
     session_string: str
     api_id: str
     api_hash: str
-    member_telegram_id: int
+    member_telegram_id: Optional[int] = None
+    access_hash: Optional[str] = None
+    username: Optional[str] = None
     message: str
     personalize: Optional[bool] = False  # تخصيص بالاسم
 
@@ -1440,7 +1442,23 @@ async def send_to_member(request: SendToMemberRequest):
         
         # البحث عن العضو
         try:
-            user = await client.get_entity(request.member_telegram_id)
+            user = None
+            if request.member_telegram_id is not None:
+                if request.access_hash:
+                    try:
+                        user = InputPeerUser(int(request.member_telegram_id), int(request.access_hash))
+                    except Exception as peer_error:
+                        print(f"[send_to_member] Failed to build InputPeerUser: {peer_error}")
+                        user = None
+                if user is None:
+                    user = await client.get_entity(request.member_telegram_id)
+            elif request.username:
+                user = await client.get_entity(request.username)
+            else:
+                raise HTTPException(status_code=400, detail="member_telegram_id or username is required")
+        except HTTPException:
+            await client.disconnect()
+            raise
         except Exception as e:
             await client.disconnect()
             raise HTTPException(status_code=404, detail=f"Member not found: {str(e)}")
