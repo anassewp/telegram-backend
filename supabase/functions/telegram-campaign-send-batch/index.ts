@@ -757,16 +757,14 @@ Deno.serve(async (req) => {
                         throw new Error(sendResult.message || 'فشل في إرسال الرسالة');
                     }
 
-                    // Apply smart delay
-                    const delay = smartDelay(
+                    // Edge Functions لديها حد زمني (≈60 ثانية)، لذا لا يمكننا الانتظار 30-90 ثانية هنا.
+                    // بدلاً من ذلك نكتفي بتسجيل التأخير المطلوب، ويُفترض أن يتم ضبط التأخير فعلياً داخل backend/Telethon (Rate Limit موجود هناك).
+                    const configuredDelay = smartDelay(
                         campaign.delay_between_messages_min || 30,
                         campaign.delay_between_messages_max || 90,
                         campaign.delay_variation !== false
                     );
-                    
-                    console.log(`      ⏳ انتظار ${delay} ثانية قبل الرسالة التالية...`);
-                    // Wait (convert to milliseconds)
-                    await new Promise(resolve => setTimeout(resolve, delay * 1000));
+                    console.log(`      ⏳ المطلوب الانتظار ${configuredDelay}s (سيتم تخطي الانتظار داخل Edge Function لتفادي الـ timeout؛ الـBackend يطبق القيود الفعلية).`);
 
                 } catch (error: any) {
                     // Logging شامل للأخطاء في كل رسالة
