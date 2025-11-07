@@ -34,13 +34,23 @@ Deno.serve(async (req) => {
     try {
         // Extract parameters from request body
         requestData = await req.json();
-        console.log('Received request data:', JSON.stringify({
-            ...requestData,
-            selected_groups: requestData.selected_groups,
-            selected_members: requestData.selected_members,
-            selected_group_usernames: requestData.selected_group_usernames,
-            selected_member_usernames: requestData.selected_member_usernames
-        }));
+        
+        console.log('========== إنشاء حملة جديدة ==========');
+        console.log('Timestamp:', new Date().toISOString());
+        console.log('Request received:', {
+            has_user_id: !!requestData?.user_id,
+            has_name: !!requestData?.name,
+            campaign_type: requestData?.campaign_type,
+            target_type: requestData?.target_type,
+            selected_groups_count: Array.isArray(requestData?.selected_groups) ? requestData.selected_groups.length : 0,
+            selected_members_count: Array.isArray(requestData?.selected_members) ? requestData.selected_members.length : 0,
+            session_ids_count: Array.isArray(requestData?.session_ids) ? requestData.session_ids.length : 0
+        });
+        console.log('Environment check:', {
+            supabase_url: SUPABASE_URL ? 'Set' : 'Missing',
+            service_role_key: SUPABASE_SERVICE_ROLE_KEY ? 'Set' : 'Missing',
+            telegram_backend_url: TELEGRAM_BACKEND_URL
+        });
         
         const {
             user_id,
@@ -80,8 +90,16 @@ Deno.serve(async (req) => {
             throw new Error('يجب تحديد جلسة واحدة على الأقل');
         }
 
+        // التحقق من Environment Variables (مثل الوظائف الناجحة)
         if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-            throw new Error('إعدادات Supabase مفقودة');
+            const errorMsg = 'إعدادات Supabase مفقودة - Supabase configuration missing';
+            console.error('⚠️', errorMsg);
+            throw new Error(errorMsg);
+        }
+
+        // التحقق من TELEGRAM_BACKEND_URL (مثل telegram-search-groups)
+        if (!TELEGRAM_BACKEND_URL || TELEGRAM_BACKEND_URL === 'http://localhost:8000') {
+            console.warn('⚠️ TELEGRAM_BACKEND_URL not set or using default. Backend validation may be skipped.');
         }
 
         // Validate campaign_type
@@ -118,7 +136,8 @@ Deno.serve(async (req) => {
             throw new Error('يجب تحديد عضو واحد على الأقل (ID أو username) عندما يكون target_type هو members أو both');
         }
 
-        // Verify sessions exist and are active
+        // Verify sessions exist and are active (مثل telegram-import-groups)
+        console.log(`التحقق من ${session_ids.length} جلسة...`);
         const sessionsResponse = await fetch(
             `${SUPABASE_URL}/rest/v1/telegram_sessions?id=in.(${session_ids.join(',')})&user_id=eq.${user_id}&status=eq.active`,
             {
@@ -131,13 +150,18 @@ Deno.serve(async (req) => {
         );
 
         if (!sessionsResponse.ok) {
-            throw new Error('فشل في جلب بيانات الجلسات');
+            const errorText = await sessionsResponse.text();
+            console.error(`فشل في جلب بيانات الجلسات: ${sessionsResponse.status} - ${errorText}`);
+            throw new Error(`فشل في جلب بيانات الجلسات: ${errorText.substring(0, 200)}`);
         }
 
         const sessions = await sessionsResponse.json();
+        console.log(`تم العثور على ${sessions.length} جلسة نشطة من ${session_ids.length} مطلوبة`);
         
         if (sessions.length !== session_ids.length) {
-            throw new Error('بعض الجلسات المحددة غير موجودة أو غير نشطة');
+            const missingSessions = session_ids.filter(id => !sessions.find((s: any) => s.id === id));
+            console.error(`جلسات مفقودة أو غير نشطة:`, missingSessions);
+            throw new Error(`بعض الجلسات المحددة غير موجودة أو غير نشطة. الجلسات المفقودة: ${missingSessions.join(', ')}`);
         }
 
         // Verify groups exist (if selected) - only verify IDs that exist in database
@@ -214,52 +238,64 @@ Deno.serve(async (req) => {
         }
 
         // Validate with Backend API (optional - skip if endpoint doesn't exist)
-        try {
-            const backendValidation = await fetch(`${TELEGRAM_BACKEND_URL}/campaigns/create`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    name,
-                    campaign_type,
-                    message_text,
-                    target_type,
-                    selected_groups: Array.isArray(selected_groups) ? selected_groups : [],
-                    selected_members: Array.isArray(selected_members) ? selected_members : [],
-                    session_ids,
-                    distribution_strategy,
-                    max_messages_per_session,
-                    max_messages_per_day,
-                    delay_between_messages_min,
-                    delay_between_messages_max,
-                    delay_variation,
-                    exclude_sent_members,
-                    exclude_bots,
-                    exclude_premium,
-                    exclude_verified,
-                    exclude_scam,
-                    exclude_fake,
-                    personalize_messages,
-                    vary_emojis,
-                    message_templates,
-                    schedule_at
-                })
-            });
+        // مثل telegram-search-groups: التحقق من TELEGRAM_BACKEND_URL أولاً
+        if (TELEGRAM_BACKEND_URL && TELEGRAM_BACKEND_URL !== 'http://localhost:8000') {
+            try {
+                console.log('التحقق من Backend API...');
+                const backendValidation = await fetch(`${TELEGRAM_BACKEND_URL}/campaigns/create`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        name,
+                        campaign_type,
+                        message_text,
+                        target_type,
+                        selected_groups: Array.isArray(selected_groups) ? selected_groups : [],
+                        selected_members: Array.isArray(selected_members) ? selected_members : [],
+                        session_ids,
+                        distribution_strategy,
+                        max_messages_per_session,
+                        max_messages_per_day,
+                        delay_between_messages_min,
+                        delay_between_messages_max,
+                        delay_variation,
+                        exclude_sent_members,
+                        exclude_bots,
+                        exclude_premium,
+                        exclude_verified,
+                        exclude_scam,
+                        exclude_fake,
+                        personalize_messages,
+                        vary_emojis,
+                        message_templates,
+                        schedule_at
+                    }),
+                    signal: AbortSignal.timeout(10000) // timeout 10 seconds
+                });
 
-            if (!backendValidation.ok) {
-                // If endpoint returns error, log it but don't fail (backend might not have this endpoint yet)
-                console.warn('Backend validation endpoint returned error, continuing anyway');
-                try {
-                    const errorData = await backendValidation.json();
-                    console.warn('Backend error:', errorData);
-                } catch (e) {
-                    console.warn('Backend validation failed, but continuing');
+                if (!backendValidation.ok) {
+                    const errorText = await backendValidation.text();
+                    console.warn('⚠️ Backend validation endpoint returned error, continuing anyway:', {
+                        status: backendValidation.status,
+                        error: errorText.substring(0, 200)
+                    });
+                } else {
+                    console.log('✓ Backend validation successful');
+                }
+            } catch (backendError: any) {
+                // If backend endpoint doesn't exist or fails, continue anyway
+                if (backendError.name === 'TimeoutError' || backendError.message?.includes('timeout')) {
+                    console.warn('⚠️ Backend validation timeout, continuing anyway');
+                } else if (backendError.message?.includes('Failed to fetch') || backendError.message?.includes('ECONNREFUSED')) {
+                    console.warn('⚠️ Backend not available, continuing without validation');
+                } else {
+                    console.warn('⚠️ Backend validation skipped:', backendError.message);
                 }
             }
-        } catch (backendError) {
-            // If backend endpoint doesn't exist or fails, continue anyway
-            console.warn('Backend validation skipped:', backendError.message);
+        } else {
+            console.log('⚠️ TELEGRAM_BACKEND_URL not configured, skipping backend validation');
         }
 
         // Calculate total targets (including usernames)
@@ -357,14 +393,21 @@ Deno.serve(async (req) => {
 
         if (!insertResponse.ok) {
             const errorText = await insertResponse.text();
-            console.error('فشل في حفظ الحملة:', errorText);
-            throw new Error(`فشل في حفظ الحملة في قاعدة البيانات: ${errorText}`);
+            console.error('✗ فشل في حفظ الحملة:', {
+                status: insertResponse.status,
+                statusText: insertResponse.statusText,
+                error: errorText.substring(0, 500)
+            });
+            throw new Error(`فشل في حفظ الحملة في قاعدة البيانات: ${errorText.substring(0, 200)}`);
         }
 
         const createdCampaign = await insertResponse.json();
         const campaign = Array.isArray(createdCampaign) ? createdCampaign[0] : createdCampaign;
 
-        // Return success response
+        console.log(`✓ تم إنشاء الحملة بنجاح: ${campaign.id} - ${campaign.name}`);
+        console.log('=========================================');
+
+        // Return success response (مثل telegram-import-groups)
         return new Response(
             JSON.stringify({
                 success: true,
@@ -378,7 +421,8 @@ Deno.serve(async (req) => {
                     total_targets: campaign.total_targets,
                     total_sessions: session_ids.length,
                     schedule_at: campaign.schedule_at,
-                    created_at: campaign.created_at
+                    created_at: campaign.created_at,
+                    timestamp: new Date().toISOString()
                 }
             }),
             {
@@ -388,50 +432,58 @@ Deno.serve(async (req) => {
         );
 
     } catch (error: any) {
-        // Logging شامل للأخطاء
-        const errorDetails = {
-            timestamp: new Date().toISOString(),
-            error_name: error?.name || 'Unknown',
-            error_message: error?.message || 'خطأ غير معروف',
-            error_stack: error?.stack || 'No stack trace',
-            error_cause: error?.cause || null,
+        // معالجة الأخطاء مثل telegram-import-groups
+        console.error('========== خطأ في إنشاء الحملة ==========');
+        console.error('Timestamp:', new Date().toISOString());
+        
+        // Extract error message safely (مثل telegram-import-groups)
+        let errorMessage = 'حدث خطأ غير معروف';
+        let errorDetails: any = null;
+        
+        if (error instanceof Error) {
+            errorMessage = error.message;
+            errorDetails = {
+                name: error.name,
+                stack: error.stack,
+                cause: error.cause
+            };
+        } else if (typeof error === 'string') {
+            errorMessage = error;
+        } else if (error && typeof error === 'object') {
+            errorMessage = (error as any).message || JSON.stringify(error);
+            errorDetails = error;
+        }
+        
+        console.error('Error message:', errorMessage);
+        console.error('Error details:', {
+            message: errorMessage,
+            details: errorDetails,
             request_data: requestData ? {
                 user_id: requestData.user_id || null,
                 name: requestData.name || null,
                 campaign_type: requestData.campaign_type || null,
-                target_type: requestData.target_type || null,
-                selected_groups_count: Array.isArray(requestData.selected_groups) ? requestData.selected_groups.length : 0,
-                selected_members_count: Array.isArray(requestData.selected_members) ? requestData.selected_members.length : 0,
-                session_ids_count: Array.isArray(requestData.session_ids) ? requestData.session_ids.length : 0
+                target_type: requestData.target_type || null
             } : null,
             environment: {
                 supabase_url: SUPABASE_URL ? 'Set' : 'Missing',
                 telegram_backend_url: TELEGRAM_BACKEND_URL || 'Not set'
             }
-        };
-
-        console.error('========== خطأ في إنشاء الحملة ==========');
-        console.error('Timestamp:', errorDetails.timestamp);
-        console.error('Error Name:', errorDetails.error_name);
-        console.error('Error Message:', errorDetails.error_message);
-        console.error('Error Stack:', errorDetails.error_stack);
-        console.error('Request Data:', JSON.stringify(errorDetails.request_data, null, 2));
-        console.error('Environment:', JSON.stringify(errorDetails.environment, null, 2));
-        console.error('Full Error Object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        });
         console.error('=========================================');
 
+        // Return error response (مثل telegram-import-groups و telegram-search-groups)
         return new Response(
             JSON.stringify({
                 success: false,
                 error: {
                     code: 'CAMPAIGN_CREATE_FAILED',
-                    message: error.message || 'خطأ في إنشاء الحملة',
-                    timestamp: new Date().toISOString(),
-                    details: errorDetails
+                    message: `خطأ في إنشاء الحملة: ${errorMessage}`,
+                    details: errorDetails,
+                    timestamp: new Date().toISOString()
                 }
             }),
             {
-                status: 400,
+                status: 500,
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' }
             }
         );

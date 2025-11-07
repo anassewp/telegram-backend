@@ -29,16 +29,33 @@ Deno.serve(async (req) => {
         });
     }
 
+    let requestData: any = null;
+
     try {
-        const requestData = await req.json();
+        requestData = await req.json();
         const { campaign_id, user_id } = requestData;
+        
+        console.log('========== بدء حملة ==========');
+        console.log('Timestamp:', new Date().toISOString());
+        console.log('Request received:', {
+            campaign_id: campaign_id || null,
+            user_id: user_id || null
+        });
+        console.log('Environment check:', {
+            supabase_url: SUPABASE_URL ? 'Set' : 'Missing',
+            service_role_key: SUPABASE_SERVICE_ROLE_KEY ? 'Set' : 'Missing',
+            telegram_backend_url: TELEGRAM_BACKEND_URL
+        });
 
         if (!campaign_id || !user_id) {
             throw new Error('المعاملات المطلوبة مفقودة: campaign_id, user_id');
         }
 
+        // التحقق من Environment Variables (مثل الوظائف الناجحة)
         if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-            throw new Error('إعدادات Supabase مفقودة');
+            const errorMsg = 'إعدادات Supabase مفقودة - Supabase configuration missing';
+            console.error('⚠️', errorMsg);
+            throw new Error(errorMsg);
         }
 
         // Load campaign from database
@@ -54,15 +71,19 @@ Deno.serve(async (req) => {
         );
 
         if (!campaignResponse.ok) {
-            throw new Error('فشل في جلب بيانات الحملة');
+            const errorText = await campaignResponse.text();
+            console.error(`فشل في جلب بيانات الحملة: ${campaignResponse.status} - ${errorText}`);
+            throw new Error(`فشل في جلب بيانات الحملة: ${errorText.substring(0, 200)}`);
         }
 
         const campaigns = await campaignResponse.json();
         if (!campaigns || campaigns.length === 0) {
+            console.error(`الحملة غير موجودة: campaign_id=${campaign_id}, user_id=${user_id}`);
             throw new Error('الحملة غير موجودة أو غير مصرح بها');
         }
 
         const campaign = campaigns[0];
+        console.log(`✓ تم العثور على الحملة: ${campaign.id} - ${campaign.name} (status: ${campaign.status})`);
 
         // Validate campaign status
         if (campaign.status === 'active') {
@@ -104,16 +125,22 @@ Deno.serve(async (req) => {
         );
 
         if (!sessionsResponse.ok) {
-            throw new Error('فشل في جلب بيانات الجلسات');
+            const errorText = await sessionsResponse.text();
+            console.error(`فشل في جلب بيانات الجلسات: ${sessionsResponse.status} - ${errorText}`);
+            throw new Error(`فشل في جلب بيانات الجلسات: ${errorText.substring(0, 200)}`);
         }
 
         const sessions = await sessionsResponse.json();
+        console.log(`تم العثور على ${sessions.length} جلسة نشطة من ${sessionIds.length} مطلوبة`);
+        
         if (sessions.length === 0) {
             throw new Error('لا توجد جلسات نشطة');
         }
 
         if (sessions.length !== sessionIds.length) {
-            throw new Error('بعض الجلسات المحددة غير نشطة');
+            const missingSessions = sessionIds.filter(id => !sessions.find((s: any) => s.id === id));
+            console.error(`جلسات مفقودة أو غير نشطة:`, missingSessions);
+            throw new Error(`بعض الجلسات المحددة غير نشطة. الجلسات المفقودة: ${missingSessions.join(', ')}`);
         }
 
         // Update campaign status to 'active'
@@ -137,11 +164,18 @@ Deno.serve(async (req) => {
 
         if (!updateResponse.ok) {
             const errorText = await updateResponse.text();
-            throw new Error(`فشل في تحديث حالة الحملة: ${errorText}`);
+            console.error(`✗ فشل في تحديث حالة الحملة:`, {
+                status: updateResponse.status,
+                statusText: updateResponse.statusText,
+                error: errorText.substring(0, 500)
+            });
+            throw new Error(`فشل في تحديث حالة الحملة: ${errorText.substring(0, 200)}`);
         }
 
-        // Return success response
-        // Note: Actual message sending will be handled by telegram-campaign-send-batch
+        console.log(`✓ تم بدء الحملة بنجاح: ${campaign.id}`);
+        console.log('========================================');
+
+        // Return success response (مثل telegram-import-groups)
         return new Response(
             JSON.stringify({
                 success: true,
@@ -151,7 +185,8 @@ Deno.serve(async (req) => {
                     status: 'active',
                     started_at: new Date().toISOString(),
                     total_sessions: sessions.length,
-                    total_targets: campaign.total_targets
+                    total_targets: campaign.total_targets,
+                    timestamp: new Date().toISOString()
                 }
             }),
             {
@@ -161,45 +196,56 @@ Deno.serve(async (req) => {
         );
 
     } catch (error: any) {
-        // Logging شامل للأخطاء
-        const errorDetails = {
-            timestamp: new Date().toISOString(),
-            error_name: error?.name || 'Unknown',
-            error_message: error?.message || 'خطأ غير معروف',
-            error_stack: error?.stack || 'No stack trace',
-            error_cause: error?.cause || null,
-            request_data: {
-                campaign_id: requestData?.campaign_id || null,
-                user_id: requestData?.user_id || null
-            },
+        // معالجة الأخطاء مثل telegram-import-groups
+        console.error('========== خطأ في بدء الحملة ==========');
+        console.error('Timestamp:', new Date().toISOString());
+        
+        // Extract error message safely (مثل telegram-import-groups)
+        let errorMessage = 'حدث خطأ غير معروف';
+        let errorDetails: any = null;
+        
+        if (error instanceof Error) {
+            errorMessage = error.message;
+            errorDetails = {
+                name: error.name,
+                stack: error.stack,
+                cause: error.cause
+            };
+        } else if (typeof error === 'string') {
+            errorMessage = error;
+        } else if (error && typeof error === 'object') {
+            errorMessage = (error as any).message || JSON.stringify(error);
+            errorDetails = error;
+        }
+        
+        console.error('Error message:', errorMessage);
+        console.error('Error details:', {
+            message: errorMessage,
+            details: errorDetails,
+            request_data: requestData ? {
+                campaign_id: requestData.campaign_id || null,
+                user_id: requestData.user_id || null
+            } : null,
             environment: {
                 supabase_url: SUPABASE_URL ? 'Set' : 'Missing',
                 telegram_backend_url: TELEGRAM_BACKEND_URL || 'Not set'
             }
-        };
-
-        console.error('========== خطأ في بدء الحملة ==========');
-        console.error('Timestamp:', errorDetails.timestamp);
-        console.error('Error Name:', errorDetails.error_name);
-        console.error('Error Message:', errorDetails.error_message);
-        console.error('Error Stack:', errorDetails.error_stack);
-        console.error('Request Data:', JSON.stringify(errorDetails.request_data, null, 2));
-        console.error('Environment:', JSON.stringify(errorDetails.environment, null, 2));
-        console.error('Full Error Object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        });
         console.error('========================================');
 
+        // Return error response (مثل telegram-import-groups و telegram-search-groups)
         return new Response(
             JSON.stringify({
                 success: false,
                 error: {
                     code: 'CAMPAIGN_START_FAILED',
-                    message: error.message || 'خطأ في بدء الحملة',
-                    timestamp: new Date().toISOString(),
-                    details: errorDetails
+                    message: `خطأ في بدء الحملة: ${errorMessage}`,
+                    details: errorDetails,
+                    timestamp: new Date().toISOString()
                 }
             }),
             {
-                status: 400,
+                status: 500,
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' }
             }
         );

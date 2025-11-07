@@ -92,16 +92,41 @@ Deno.serve(async (req) => {
         });
     }
 
+    let requestData: any = null;
+
     try {
-        const requestData = await req.json();
+        requestData = await req.json();
         const { campaign_id, user_id, batch_size = 10 } = requestData;
+
+        console.log('========== إرسال دفعة من الرسائل ==========');
+        console.log('Timestamp:', new Date().toISOString());
+        console.log('Request received:', {
+            campaign_id: campaign_id || null,
+            user_id: user_id || null,
+            batch_size: batch_size || 10
+        });
+        console.log('Environment check:', {
+            supabase_url: SUPABASE_URL ? 'Set' : 'Missing',
+            service_role_key: SUPABASE_SERVICE_ROLE_KEY ? 'Set' : 'Missing',
+            telegram_backend_url: TELEGRAM_BACKEND_URL
+        });
 
         if (!campaign_id || !user_id) {
             throw new Error('المعاملات المطلوبة مفقودة: campaign_id, user_id');
         }
 
+        // التحقق من Environment Variables (مثل الوظائف الناجحة)
         if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-            throw new Error('إعدادات Supabase مفقودة');
+            const errorMsg = 'إعدادات Supabase مفقودة - Supabase configuration missing';
+            console.error('⚠️', errorMsg);
+            throw new Error(errorMsg);
+        }
+
+        // التحقق من TELEGRAM_BACKEND_URL (مثل telegram-search-groups)
+        if (!TELEGRAM_BACKEND_URL || TELEGRAM_BACKEND_URL === 'http://localhost:8000') {
+            const errorMsg = 'TELEGRAM_BACKEND_URL غير مضبوط. يرجى إضافة TELEGRAM_BACKEND_URL في Supabase Environment Variables';
+            console.error('⚠️', errorMsg);
+            throw new Error(errorMsg);
         }
 
         // Load campaign
@@ -117,23 +142,27 @@ Deno.serve(async (req) => {
         );
 
         if (!campaignResponse.ok) {
-            throw new Error('فشل في جلب بيانات الحملة');
+            const errorText = await campaignResponse.text();
+            console.error(`فشل في جلب بيانات الحملة: ${campaignResponse.status} - ${errorText}`);
+            throw new Error(`فشل في جلب بيانات الحملة: ${errorText.substring(0, 200)}`);
         }
 
         const campaigns = await campaignResponse.json();
         if (!campaigns || campaigns.length === 0) {
+            console.error(`الحملة غير موجودة: campaign_id=${campaign_id}, user_id=${user_id}`);
             throw new Error('الحملة غير موجودة أو غير مصرح بها');
         }
 
         const campaign = campaigns[0];
         
-        console.log('Campaign loaded:', {
+        console.log(`✓ تم العثور على الحملة: ${campaign.id} - ${campaign.name}`);
+        console.log('Campaign details:', {
             id: campaign.id,
             status: campaign.status,
             target_type: campaign.target_type,
-            selected_groups: campaign.selected_groups,
-            selected_members: campaign.selected_members,
-            total_targets: campaign.total_targets
+            total_targets: campaign.total_targets,
+            sent_count: campaign.sent_count || 0,
+            failed_count: campaign.failed_count || 0
         });
 
         // Check campaign status
@@ -164,10 +193,14 @@ Deno.serve(async (req) => {
         );
 
         if (!sessionsResponse.ok) {
-            throw new Error('فشل في جلب بيانات الجلسات');
+            const errorText = await sessionsResponse.text();
+            console.error(`فشل في جلب بيانات الجلسات: ${sessionsResponse.status} - ${errorText}`);
+            throw new Error(`فشل في جلب بيانات الجلسات: ${errorText.substring(0, 200)}`);
         }
 
         const sessions = await sessionsResponse.json();
+        console.log(`تم العثور على ${sessions.length} جلسة نشطة من ${sessionIds.length} مطلوبة`);
+        
         if (sessions.length === 0) {
             throw new Error('لا توجد جلسات نشطة');
         }
@@ -508,8 +541,21 @@ Deno.serve(async (req) => {
                     }
 
                     if (!sendResponse.ok) {
-                        const errorData = await sendResponse.json();
-                        throw new Error(errorData.detail || errorData.message || 'فشل في إرسال الرسالة');
+                        let errorData: any = {};
+                        try {
+                            errorData = await sendResponse.json();
+                        } catch (e) {
+                            const errorText = await sendResponse.text();
+                            errorData = { message: errorText };
+                        }
+                        const errorMsg = errorData.detail || errorData.message || `فشل في إرسال الرسالة (${sendResponse.status})`;
+                        console.error(`✗ فشل في إرسال الرسالة:`, {
+                            target_type: target.type,
+                            target_id: target.id || target.username,
+                            status: sendResponse.status,
+                            error: errorMsg
+                        });
+                        throw new Error(errorMsg);
                     }
 
                     const sendResult = await sendResponse.json();
@@ -694,7 +740,7 @@ Deno.serve(async (req) => {
         let newStatus = campaign.status;
         if (totalProcessed >= campaign.total_targets) {
             newStatus = 'completed';
-            await fetch(`${SUPABASE_URL}/rest/v1/telegram_campaigns?id=eq.${campaign_id}`, {
+            const completeResponse = await fetch(`${SUPABASE_URL}/rest/v1/telegram_campaigns?id=eq.${campaign_id}`, {
                 method: 'PATCH',
                 headers: {
                     'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
@@ -707,8 +753,19 @@ Deno.serve(async (req) => {
                     updated_at: new Date().toISOString()
                 })
             });
+            
+            if (!completeResponse.ok) {
+                const errorText = await completeResponse.text();
+                console.warn(`⚠️ فشل في تحديث حالة الحملة إلى completed: ${errorText.substring(0, 200)}`);
+            } else {
+                console.log(`✓ تم تحديث حالة الحملة إلى completed`);
+            }
         }
 
+        console.log(`✓ تم إرسال ${sentCount} رسالة بنجاح، ${failedCount} فشل`);
+        console.log('===============================================');
+
+        // Return success response (مثل telegram-import-groups)
         return new Response(
             JSON.stringify({
                 success: true,
@@ -718,7 +775,8 @@ Deno.serve(async (req) => {
                     failed: failedCount,
                     total_processed: totalProcessed,
                     total_targets: campaign.total_targets,
-                    campaign_status: newStatus
+                    campaign_status: newStatus,
+                    timestamp: new Date().toISOString()
                 },
                 results: results,
                 errors: errors
@@ -730,46 +788,57 @@ Deno.serve(async (req) => {
         );
 
     } catch (error: any) {
-        // Logging شامل للأخطاء
-        const errorDetails = {
-            timestamp: new Date().toISOString(),
-            error_name: error?.name || 'Unknown',
-            error_message: error?.message || 'خطأ غير معروف',
-            error_stack: error?.stack || 'No stack trace',
-            error_cause: error?.cause || null,
-            request_data: {
-                campaign_id: requestData?.campaign_id || null,
-                user_id: requestData?.user_id || null,
-                batch_size: requestData?.batch_size || null
-            },
+        // معالجة الأخطاء مثل telegram-import-groups
+        console.error('========== خطأ في إرسال دفعة الرسائل ==========');
+        console.error('Timestamp:', new Date().toISOString());
+        
+        // Extract error message safely (مثل telegram-import-groups)
+        let errorMessage = 'حدث خطأ غير معروف';
+        let errorDetails: any = null;
+        
+        if (error instanceof Error) {
+            errorMessage = error.message;
+            errorDetails = {
+                name: error.name,
+                stack: error.stack,
+                cause: error.cause
+            };
+        } else if (typeof error === 'string') {
+            errorMessage = error;
+        } else if (error && typeof error === 'object') {
+            errorMessage = (error as any).message || JSON.stringify(error);
+            errorDetails = error;
+        }
+        
+        console.error('Error message:', errorMessage);
+        console.error('Error details:', {
+            message: errorMessage,
+            details: errorDetails,
+            request_data: requestData ? {
+                campaign_id: requestData.campaign_id || null,
+                user_id: requestData.user_id || null,
+                batch_size: requestData.batch_size || null
+            } : null,
             environment: {
                 supabase_url: SUPABASE_URL ? 'Set' : 'Missing',
                 telegram_backend_url: TELEGRAM_BACKEND_URL || 'Not set'
             }
-        };
-
-        console.error('========== خطأ في إرسال دفعة الرسائل ==========');
-        console.error('Timestamp:', errorDetails.timestamp);
-        console.error('Error Name:', errorDetails.error_name);
-        console.error('Error Message:', errorDetails.error_message);
-        console.error('Error Stack:', errorDetails.error_stack);
-        console.error('Request Data:', JSON.stringify(errorDetails.request_data, null, 2));
-        console.error('Environment:', JSON.stringify(errorDetails.environment, null, 2));
-        console.error('Full Error Object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        });
         console.error('===============================================');
 
+        // Return error response (مثل telegram-import-groups و telegram-search-groups)
         return new Response(
             JSON.stringify({
                 success: false,
                 error: {
                     code: 'CAMPAIGN_SEND_BATCH_FAILED',
-                    message: error.message || 'خطأ في إرسال دفعة الرسائل',
-                    timestamp: new Date().toISOString(),
-                    details: errorDetails
+                    message: `خطأ في إرسال دفعة الرسائل: ${errorMessage}`,
+                    details: errorDetails,
+                    timestamp: new Date().toISOString()
                 }
             }),
             {
-                status: 400,
+                status: 500,
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' }
             }
         );
